@@ -8,6 +8,7 @@ import numpy as np
 import joblib
 import requests
 import os
+import time
 import base64
 from datetime import datetime, timedelta
 from io import StringIO
@@ -105,43 +106,57 @@ def get_eur_huf():
         return None,False
 
 def get_ho():
-    try:
-        r = requests.get("https://api.open-meteo.com/v1/forecast",
-            params={"latitude":47.5,"longitude":19.0,"current_weather":"true","timezone":"Europe/Budapest"},timeout=10)
-        return float(r.json()["current_weather"]["temperature"]),True
-    except Exception as e:
-        print(f"[HIBA] Open-Meteo (aktuális hőmérséklet): {e}", flush=True)
-        return None,False
+    for kiserlet in range(3):
+        try:
+            r = requests.get("https://api.open-meteo.com/v1/forecast",
+                params={"latitude":47.5,"longitude":19.0,"current_weather":"true","timezone":"Europe/Budapest"},timeout=10)
+            d = r.json()
+            if "current_weather" not in d:
+                print(f"[HIBA] Open-Meteo (hőmérséklet) {kiserlet+1}. kísérlet — HTTP {r.status_code}, válasz: {str(d)[:200]}", flush=True)
+                time.sleep(3)
+                continue
+            return float(d["current_weather"]["temperature"]),True
+        except Exception as e:
+            print(f"[HIBA] Open-Meteo (hőmérséklet) {kiserlet+1}. kísérlet: {e}", flush=True)
+            time.sleep(3)
+    return None,False
 
 def get_idojaras():
-    try:
-        ma = datetime.now().replace(hour=0,minute=0,second=0,microsecond=0)
-        r = requests.get("https://api.open-meteo.com/v1/forecast",
-            params={"latitude":47.5,"longitude":19.0,
-                "hourly":"temperature_2m,relative_humidity_2m,direct_radiation,wind_speed_10m,precipitation",
-                "daily":"temperature_2m_max,temperature_2m_min,weathercode",
-                "timezone":"Europe/Budapest",
-                "start_date":(ma+timedelta(days=1)).strftime("%Y-%m-%d"),
-                "end_date":(ma+timedelta(days=4)).strftime("%Y-%m-%d")},timeout=15)
-        d = r.json()
-        hourly = pd.DataFrame({"Datum":pd.to_datetime(d["hourly"]["time"]),
-            "Homerseklet_C":d["hourly"]["temperature_2m"],
-            "Paratartalom_szazalek":d["hourly"]["relative_humidity_2m"],
-            "Napsugarzas_W_m2":d["hourly"]["direct_radiation"],
-            "Szelsebesseg_kmh":d["hourly"]["wind_speed_10m"],
-            "Csapadek_mm":d["hourly"]["precipitation"]})
-        holnap = (ma+timedelta(days=1)).date()
-        hourly = hourly[hourly["Datum"].dt.date==holnap].reset_index(drop=True)
-        daily = {"max":d["daily"]["temperature_2m_max"][:4],
-                 "min":d["daily"]["temperature_2m_min"][:4],
-                 "code":d["daily"]["weathercode"][:4]}
-        if len(hourly)==0:
-            print("[HIBA] Open-Meteo (előrejelzés): üres válasz a holnapi napra", flush=True)
-            return None,None,False
-        return hourly,daily,True
-    except Exception as e:
-        print(f"[HIBA] Open-Meteo (előrejelzés): {e}", flush=True)
-        return None,None,False
+    for kiserlet in range(3):
+        try:
+            ma = datetime.now().replace(hour=0,minute=0,second=0,microsecond=0)
+            r = requests.get("https://api.open-meteo.com/v1/forecast",
+                params={"latitude":47.5,"longitude":19.0,
+                    "hourly":"temperature_2m,relative_humidity_2m,direct_radiation,wind_speed_10m,precipitation",
+                    "daily":"temperature_2m_max,temperature_2m_min,weathercode",
+                    "timezone":"Europe/Budapest",
+                    "start_date":(ma+timedelta(days=1)).strftime("%Y-%m-%d"),
+                    "end_date":(ma+timedelta(days=4)).strftime("%Y-%m-%d")},timeout=15)
+            d = r.json()
+            if "hourly" not in d:
+                print(f"[HIBA] Open-Meteo (előrejelzés) {kiserlet+1}. kísérlet — HTTP {r.status_code}, válasz: {str(d)[:200]}", flush=True)
+                time.sleep(3)
+                continue
+            hourly = pd.DataFrame({"Datum":pd.to_datetime(d["hourly"]["time"]),
+                "Homerseklet_C":d["hourly"]["temperature_2m"],
+                "Paratartalom_szazalek":d["hourly"]["relative_humidity_2m"],
+                "Napsugarzas_W_m2":d["hourly"]["direct_radiation"],
+                "Szelsebesseg_kmh":d["hourly"]["wind_speed_10m"],
+                "Csapadek_mm":d["hourly"]["precipitation"]})
+            holnap = (ma+timedelta(days=1)).date()
+            hourly = hourly[hourly["Datum"].dt.date==holnap].reset_index(drop=True)
+            daily = {"max":d["daily"]["temperature_2m_max"][:4],
+                     "min":d["daily"]["temperature_2m_min"][:4],
+                     "code":d["daily"]["weathercode"][:4]}
+            if len(hourly)==0:
+                print("[HIBA] Open-Meteo (előrejelzés): üres válasz a holnapi napra", flush=True)
+                time.sleep(3)
+                continue
+            return hourly,daily,True
+        except Exception as e:
+            print(f"[HIBA] Open-Meteo (előrejelzés) {kiserlet+1}. kísérlet: {e}", flush=True)
+            time.sleep(3)
+    return None,None,False
 
 def get_dam():
     """Holnapi DAM árak. Publikálás előtt (kb. 14:00-ig) a MAI valós
@@ -150,7 +165,7 @@ def get_dam():
         return None,None,False,"nincs_kulcs"
     try:
         from entsoe import EntsoePandasClient
-        c = EntsoePandasClient(api_key=ENTSOE_API_KEY)
+        c = EntsoePandasClient(api_key=ENTSOE_API_KEY, timeout=30)
         ma = datetime.now().replace(hour=0,minute=0,second=0,microsecond=0)
         # 1. próba: holnapi árak
         hs = pd.Timestamp((ma+timedelta(days=1)).strftime("%Y-%m-%d"),tz="Europe/Budapest")
@@ -177,7 +192,7 @@ def get_load():
         return None,False
     try:
         from entsoe import EntsoePandasClient
-        c = EntsoePandasClient(api_key=ENTSOE_API_KEY)
+        c = EntsoePandasClient(api_key=ENTSOE_API_KEY, timeout=30)
         ma = datetime.now().replace(hour=0,minute=0,second=0,microsecond=0)
         s = pd.Timestamp((ma-timedelta(days=8)).strftime("%Y-%m-%d"),tz="Europe/Budapest")
         e = pd.Timestamp(ma.strftime("%Y-%m-%d"),tz="Europe/Budapest")
@@ -200,7 +215,7 @@ def get_megujulo():
         return None,None,False
     try:
         from entsoe import EntsoePandasClient
-        c = EntsoePandasClient(api_key=ENTSOE_API_KEY)
+        c = EntsoePandasClient(api_key=ENTSOE_API_KEY, timeout=30)
         ma = datetime.now().replace(hour=0,minute=0,second=0,microsecond=0)
         s = pd.Timestamp((ma-timedelta(days=7)).strftime("%Y-%m-%d"),tz="Europe/Budapest")
         e = pd.Timestamp(ma.strftime("%Y-%m-%d"),tz="Europe/Budapest")
