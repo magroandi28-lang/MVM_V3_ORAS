@@ -100,7 +100,8 @@ def get_eur_huf():
         df = pd.read_csv(StringIO(r.text))[["TIME_PERIOD","OBS_VALUE"]].dropna()
         df["OBS_VALUE"] = pd.to_numeric(df["OBS_VALUE"],errors="coerce")
         return float(df["OBS_VALUE"].dropna().iloc[-1]),True
-    except:
+    except Exception as e:
+        print(f"[HIBA] ECB árfolyam: {e}", flush=True)
         return None,False
 
 def get_ho():
@@ -108,7 +109,8 @@ def get_ho():
         r = requests.get("https://api.open-meteo.com/v1/forecast",
             params={"latitude":47.5,"longitude":19.0,"current_weather":"true","timezone":"Europe/Budapest"},timeout=10)
         return float(r.json()["current_weather"]["temperature"]),True
-    except:
+    except Exception as e:
+        print(f"[HIBA] Open-Meteo (aktuális hőmérséklet): {e}", flush=True)
         return None,False
 
 def get_idojaras():
@@ -134,9 +136,11 @@ def get_idojaras():
                  "min":d["daily"]["temperature_2m_min"][:4],
                  "code":d["daily"]["weathercode"][:4]}
         if len(hourly)==0:
+            print("[HIBA] Open-Meteo (előrejelzés): üres válasz a holnapi napra", flush=True)
             return None,None,False
         return hourly,daily,True
-    except:
+    except Exception as e:
+        print(f"[HIBA] Open-Meteo (előrejelzés): {e}", flush=True)
         return None,None,False
 
 def get_dam():
@@ -161,8 +165,10 @@ def get_dam():
         ho = c.query_day_ahead_prices("HU",start=ms,end=ms+pd.Timedelta(days=1))
         if ho is not None and len(ho)>=20:
             return float(ho.mean()),ho,True,"ma"
+        print("[HIBA] ENTSO-E (DAM): sem holnapi, sem mai ár nem érkezett", flush=True)
         return None,None,False,"nincs_adat"
-    except:
+    except Exception as e:
+        print(f"[HIBA] ENTSO-E (DAM árak): {e}", flush=True)
         return None,None,False,"api_hiba"
 
 def get_load():
@@ -178,14 +184,19 @@ def get_load():
         load = c.query_load("HU",start=s,end=e)
         if isinstance(load,pd.DataFrame): load=load.iloc[:,0]
         if load is None or len(load)<168:
+            print(f"[HIBA] ENTSO-E (fogyasztás): kevés adat érkezett ({0 if load is None else len(load)} sor, minimum 168 kell)", flush=True)
             return None,False
         return load,True
-    except:
+    except Exception as e:
+        print(f"[HIBA] ENTSO-E (fogyasztás): {e}", flush=True)
         return None,False
 
 def get_megujulo():
-    """Elmúlt 7 nap átlagos nap- és szélenergia-termelése — ÉLŐ ENTSO-E."""
+    """Elmúlt 7 nap átlagos nap- és szélenergia-termelése — ÉLŐ ENTSO-E.
+    Szűkített lekérdezés: csak a nap (B16) és a szárazföldi szél (B19)
+    termeléstípus jön le — a többi erőműtípus adata felesleges lenne."""
     if not ENTSOE_API_KEY:
+        print("[HIBA] Megújuló: nincs ENTSOE_API_KEY beállítva", flush=True)
         return None,None,False
     try:
         from entsoe import EntsoePandasClient
@@ -193,15 +204,24 @@ def get_megujulo():
         ma = datetime.now().replace(hour=0,minute=0,second=0,microsecond=0)
         s = pd.Timestamp((ma-timedelta(days=7)).strftime("%Y-%m-%d"),tz="Europe/Budapest")
         e = pd.Timestamp(ma.strftime("%Y-%m-%d"),tz="Europe/Budapest")
-        g = c.query_generation("HU",start=s,end=e)
-        sc=[x for x in g.columns if 'Solar' in str(x)]
-        wc=[x for x in g.columns if 'Wind' in str(x)]
-        if not sc and not wc:
+        nap = None; szel = None
+        try:
+            g_nap = c.query_generation("HU",start=s,end=e,psr_type="B16")
+            if isinstance(g_nap,pd.DataFrame): g_nap = g_nap.sum(axis=1)
+            nap = float(g_nap.mean())
+        except Exception as e1:
+            print(f"[HIBA] Megújuló (nap, B16): {e1}", flush=True)
+        try:
+            g_szel = c.query_generation("HU",start=s,end=e,psr_type="B19")
+            if isinstance(g_szel,pd.DataFrame): g_szel = g_szel.sum(axis=1)
+            szel = float(g_szel.mean())
+        except Exception as e2:
+            print(f"[HIBA] Megújuló (szél, B19): {e2}", flush=True)
+        if nap is None and szel is None:
             return None,None,False
-        nap = float(g[sc].sum(1).mean()) if sc else 0.0
-        szel = float(g[wc].sum(1).mean()) if wc else 0.0
-        return nap,szel,True
-    except:
+        return (nap if nap is not None else 0.0),(szel if szel is not None else 0.0),True
+    except Exception as e:
+        print(f"[HIBA] Megújuló termelés: {e}", flush=True)
         return None,None,False
 
 def elorejelez(ido_df,dam_atlag,eur_huf,load_hist,nap,szel,dam_oras):
