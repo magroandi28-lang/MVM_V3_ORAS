@@ -8,8 +8,9 @@ requests>=2.32
 statsmodels>=0.14
 holidays>=0.50
 entsoe-py>=0.6
-xgboost==3.2.0
+xgboost>=2.0
 lightgbm>=4.3
 catboost>=1.2
 scikit-learn>=1.4
 gunicorn>=22.0
+python-dotenv>=1.0
