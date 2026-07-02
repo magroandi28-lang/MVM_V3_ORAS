@@ -16,6 +16,7 @@ from statsmodels.tsa.seasonal import STL
 import holidays
 from dotenv import load_dotenv
 load_dotenv()
+
 app = dash.Dash(__name__,
     external_stylesheets=[dbc.themes.BOOTSTRAP],
     suppress_callback_exceptions=True,
@@ -25,6 +26,7 @@ server = app.server
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 ENTSOE_API_KEY = os.environ.get("ENTSOE_API_KEY","")
+VISUAL_CROSSING_KEY = os.environ.get("VISUAL_CROSSING_KEY","")
 hu_holidays = holidays.Hungary(years=[2025,2026,2027])
 
 # ============================================================
@@ -150,6 +152,81 @@ def get_ho():
             print(f"[HIBA] Open-Meteo (hőmérséklet) {kiserlet+1}. kísérlet: {e}", flush=True)
             time.sleep(3)
     return None,False
+
+# ============================================================
+# TARTALÉK IDŐJÁRÁS-FORRÁS: Visual Crossing
+# Ha az Open-Meteo napi kerete kimerül (HTTP 429), az app
+# automatikusan erre vált — ez is élő adat, másik szolgáltatótól.
+# ============================================================
+
+def get_ho_vc():
+    """Aktuális hőmérséklet a Visual Crossingtól."""
+    if not VISUAL_CROSSING_KEY:
+        return None,False
+    try:
+        r = requests.get(
+            "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/47.5,19.0/today",
+            params={"key":VISUAL_CROSSING_KEY,"unitGroup":"metric",
+                    "include":"current","elements":"temp"},timeout=15)
+        d = r.json() if r.status_code==200 else {}
+        if "currentConditions" in d and d["currentConditions"].get("temp") is not None:
+            return float(d["currentConditions"]["temp"]),True
+        print(f"[HIBA] Visual Crossing (hőmérséklet): HTTP {r.status_code}, válasz: {str(r.text)[:200]}", flush=True)
+        return None,False
+    except Exception as e:
+        print(f"[HIBA] Visual Crossing (hőmérséklet): {e}", flush=True)
+        return None,False
+
+def get_idojaras_vc():
+    """Holnapi órás előrejelzés + 4 napos kilátás a Visual Crossingtól,
+    ugyanabban a formátumban, mint az Open-Meteo-s változat."""
+    if not VISUAL_CROSSING_KEY:
+        return None,None,False
+    try:
+        ma = datetime.now().replace(hour=0,minute=0,second=0,microsecond=0)
+        holnap = (ma+timedelta(days=1)).strftime("%Y-%m-%d")
+        veg = (ma+timedelta(days=4)).strftime("%Y-%m-%d")
+        r = requests.get(
+            f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/47.5,19.0/{holnap}/{veg}",
+            params={"key":VISUAL_CROSSING_KEY,"unitGroup":"metric","include":"hours,days",
+                    "elements":"datetime,temp,humidity,solarradiation,windspeed,precip,tempmax,tempmin"},
+            timeout=20)
+        d = r.json() if r.status_code==200 else {}
+        if "days" not in d or not d["days"]:
+            print(f"[HIBA] Visual Crossing (előrejelzés): HTTP {r.status_code}, válasz: {str(r.text)[:200]}", flush=True)
+            return None,None,False
+        nap1 = d["days"][0]
+        hourly = pd.DataFrame({
+            "Datum":[pd.to_datetime(f"{nap1['datetime']} {h['datetime']}") for h in nap1["hours"]],
+            "Homerseklet_C":[h.get("temp") for h in nap1["hours"]],
+            "Paratartalom_szazalek":[h.get("humidity") or 0 for h in nap1["hours"]],
+            "Napsugarzas_W_m2":[h.get("solarradiation") or 0 for h in nap1["hours"]],
+            "Szelsebesseg_kmh":[h.get("windspeed") or 0 for h in nap1["hours"]],
+            "Csapadek_mm":[h.get("precip") or 0 for h in nap1["hours"]]})
+        daily = {"max":[nap.get("tempmax") for nap in d["days"][:4]],
+                 "min":[nap.get("tempmin") for nap in d["days"][:4]],
+                 "code":[None]*min(4,len(d["days"]))}
+        return hourly,daily,True
+    except Exception as e:
+        print(f"[HIBA] Visual Crossing (előrejelzés): {e}", flush=True)
+        return None,None,False
+
+def get_ho_barmelyik():
+    """Hőmérséklet: Open-Meteo, ha nem megy → Visual Crossing."""
+    t,ok = get_ho()
+    if ok: return t,ok
+    return get_ho_vc()
+
+def get_idojaras_barmelyik():
+    """Előrejelzés: Open-Meteo, ha nem megy → Visual Crossing.
+    A negyedik elem a ténylegesen használt forrás neve."""
+    h,dl,ok = get_idojaras()
+    if ok: return h,dl,ok,"Open-Meteo"
+    h,dl,ok = get_idojaras_vc()
+    if ok:
+        print("[INFO] Időjárás: Visual Crossing tartalék forrás aktív", flush=True)
+        return h,dl,ok,"Visual Crossing"
+    return None,None,False,None
 
 def get_idojaras():
     for kiserlet in range(3):
@@ -352,6 +429,17 @@ def hiba_panel(hianyzo, modell_hiba=None):
     return html.Div(sorok,style={"background":C['card'],"border":f"1px solid {C['rd']}",
         "borderRadius":"14px","padding":"24px","maxWidth":"640px"})
 
+def hianyzo_panel(cim, uzenet):
+    """Egyetlen panel helyére kerülő jelzés, ha az adott adatforrás épp nem él.
+    A dashboard többi része ettől még teljes értékűen működik."""
+    return html.Div([
+        html.Div(cim,style={"fontSize":"11px","fontWeight":"600","color":C['wh'],"marginBottom":"12px"}),
+        html.Div([
+            html.Div("⚠",style={"fontSize":"22px","color":C['yw'],"textAlign":"center","marginBottom":"8px"}),
+            html.Div(uzenet,style={"fontSize":"11px","color":C['mut'],"textAlign":"center"})
+        ],style={"display":"flex","flexDirection":"column","justifyContent":"center","flex":"1","padding":"20px 10px"})
+    ],style={**CS,"display":"flex","flexDirection":"column"})
+
 SIDEBAR = html.Div([
     html.Div([
         html.Span("⚡",style={"fontSize":"24px"}),
@@ -403,45 +491,57 @@ def fetch(n):
         return {"kritikus_hiba":True,"hianyzo":[],"modell_hiba":MODELL_HIBA}
 
     eur_huf,eur_ok = cachelt("ecb", 6*3600, get_eur_huf, 1)
-    ido_df,daily,ido_ok = cachelt("idojaras", 3600, get_idojaras, 2)
+    ido_df,daily,ido_ok,ido_forras = cachelt("idojaras", 3600, get_idojaras_barmelyik, 2)
     dam_atlag,dam_oras,dam_ok,dam_forras = cachelt("dam", 3600, get_dam, 2)
     load,load_ok = cachelt("load", 3600, get_load, 1)
     nap,szel,gen_ok = cachelt("megujulo", 3600, get_megujulo, 2)
-    aho,ho_ok = cachelt("homerseklet", 3600, get_ho, 1)
+    aho,ho_ok = cachelt("homerseklet", 3600, get_ho_barmelyik, 1)
 
     hianyzo = []
     if not dam_ok: hianyzo.append("ENTSO-E (DAM árak)")
     if not load_ok: hianyzo.append("ENTSO-E (fogyasztás)")
     if not gen_ok: hianyzo.append("ENTSO-E (megújuló termelés)")
-    if not ido_ok: hianyzo.append("Open-Meteo (időjárás)")
+    if not ido_ok: hianyzo.append("Időjárás (Open-Meteo és Visual Crossing)")
     if not eur_ok: hianyzo.append("ECB (árfolyam)")
 
-    # Kritikus források nélkül nincs előrejelzés
-    if not (dam_ok and load_ok and ido_ok and eur_ok and gen_ok):
+    # Egyetlen kritikus forrás van: a DAM árak. Enélkül nincs mit mutatni.
+    if not dam_ok:
         return {"kritikus_hiba":True,"hianyzo":hianyzo,"modell_hiba":None}
 
-    eredm = elorejelez(ido_df,dam_atlag,eur_huf,load,nap,szel,dam_oras)
+    # Fogyasztás-előrejelzés csak akkor fut, ha MINDEN modell-bemenet él.
+    # Ha valamelyik hiányzik, a többi panel attól még működik.
+    eredm = None
+    if ido_ok and load_ok and eur_ok and gen_ok:
+        eredm = elorejelez(ido_df,dam_atlag,eur_huf,load,nap,szel,dam_oras)
 
     stl_data = None
-    try:
-        s = load.tail(720) if len(load)>=720 else load
-        res = STL(s,period=24,seasonal=25,robust=True).fit()
-        std=float(res.resid.std()); mean=float(res.resid.mean()); kuszob=2.5*std
-        mask=abs(res.resid-mean)>kuszob
-        stl_data={"trend":res.trend.tolist(),"seasonal":res.seasonal.tolist(),
-            "residual":res.resid.tolist(),"original":[float(x) for x in s],
-            "anomalia_db":int(mask.sum()),
-            "stat":{"std":std,"mean":mean,"kuszob":kuszob,
-                "trend_utolso":float(res.trend.iloc[-1]),
-                "irany":"emelkedő" if res.trend.iloc[-1]>res.trend.iloc[-24] else "csökkenő"}}
-    except: pass
+    if load_ok:
+        try:
+            s = load.tail(720) if len(load)>=720 else load
+            res = STL(s,period=24,seasonal=25,robust=True).fit()
+            std=float(res.resid.std()); mean=float(res.resid.mean()); kuszob=2.5*std
+            mask=abs(res.resid-mean)>kuszob
+            stl_data={"trend":res.trend.tolist(),"seasonal":res.seasonal.tolist(),
+                "residual":res.resid.tolist(),"original":[float(x) for x in s],
+                "anomalia_db":int(mask.sum()),
+                "stat":{"std":std,"mean":mean,"kuszob":kuszob,
+                    "trend_utolso":float(res.trend.iloc[-1]),
+                    "irany":"emelkedő" if res.trend.iloc[-1]>res.trend.iloc[-24] else "csökkenő"}}
+        except Exception as e:
+            print(f"[HIBA] STL számítás: {e}", flush=True)
 
-    return {"kritikus_hiba":False,"eredm":eredm,"eur_huf":eur_huf,"dam_atlag":dam_atlag,
+    return {"kritikus_hiba":False,
+        "eredm":eredm,
+        "eur_huf":eur_huf if eur_ok else None,
+        "dam_atlag":dam_atlag,
         "dam_oras":[float(x) for x in dam_oras],
         "dam_forras":dam_forras,
-        "aho":aho,"stl":stl_data,"daily":daily,
+        "ido_forras":ido_forras if ido_ok else None,
+        "aho":aho if ho_ok else None,
+        "stl":stl_data,
+        "daily":daily if ido_ok else None,
         "frissites":datetime.now().strftime("%H:%M"),
-        "fb":{"ENTSO-E":not dam_ok,"Open-Meteo":not ido_ok,"ECB":not eur_ok},
+        "fb":{"ENTSO-E":not (dam_ok and load_ok and gen_ok),"Időjárás":not ido_ok,"ECB":not eur_ok},
         "hianyzo":hianyzo}
 
 @callback(Output("oldal","data"),
@@ -481,56 +581,71 @@ def render(data,oldal):
             html.Span("Éles adatkapcsolat megszakadt",style={"fontSize":"12px","color":C['rd'],"fontWeight":"500"})
         ])
         src = html.Div([src_sor(k, k not in " ".join(data.get("hianyzo",[])))
-                        for k in ["ENTSO-E","Open-Meteo","ECB"]])
+                        for k in ["ENTSO-E","Időjárás","ECB"]])
         return (statusz,html.Div(),
             hiba_panel(data.get("hianyzo",[]),data.get("modell_hiba")),
             src,modell_info,*ns)
 
-    edf=pd.DataFrame(data["eredm"])
-    eur_huf=data["eur_huf"]; dam_atlag=data["dam_atlag"]; aho=data["aho"]
-    fb=data["fb"]
-    legolcs=edf.loc[edf["dam_ar"].idxmin()]
+    # --- Részleges megjelenítés: ami él, azt mutatjuk ---
+    dam_oras = data["dam_oras"]
+    dam_df = pd.DataFrame({"ora":list(range(len(dam_oras))),"dam_ar":dam_oras})
+    edf = pd.DataFrame(data["eredm"]) if data.get("eredm") else None
+    eur_huf=data.get("eur_huf"); dam_atlag=data["dam_atlag"]; aho=data.get("aho")
+    fb=data["fb"]; hianyzo=data.get("hianyzo",[])
+    legolcs=dam_df.loc[dam_df["dam_ar"].idxmin()]
 
     stl_db=data["stl"]["anomalia_db"] if data["stl"] else 0
     stl_tot=len(data["stl"]["trend"]) if data["stl"] else 0
 
     ora=datetime.now().hour
-    dam_most=data["dam_oras"][ora] if ora<len(data["dam_oras"]) else dam_atlag
+    dam_most=dam_oras[ora] if ora<len(dam_oras) else dam_atlag
     dam_sz=dam_szin(dam_most,dam_atlag)
-    t_dam=[float(x) for x in data["dam_oras"]]
-    t_fogy=edf["fogyasztas"].tolist()
+    t_dam=[float(x) for x in dam_oras]
+    t_fogy=edf["fogyasztas"].tolist() if edf is not None else None
 
     dam_cimke = "Holnapi árak" if data["dam_forras"]=="holnap" else "Mai árak (holnapi publikálás előtt)"
+    ido_txt = f" — Időjárás: {data['ido_forras']}" if data.get("ido_forras") else ""
 
-    statusz=html.Div([
-        html.Span("● ",style={"color":C['gr']}),
-        html.Span(f"Élő adatok frissítve: {data['frissites']} — {dam_cimke}",
-            style={"fontSize":"12px","color":C['txt'],"fontWeight":"500"})
-    ])
+    if hianyzo:
+        statusz=html.Div([
+            html.Span("● ",style={"color":C['yw']}),
+            html.Span(f"Részleges élő adatok — nem elérhető: {', '.join(hianyzo)} — frissítve: {data['frissites']}",
+                style={"fontSize":"12px","color":C['yw'],"fontWeight":"500"})
+        ])
+    else:
+        statusz=html.Div([
+            html.Span("● ",style={"color":C['gr']}),
+            html.Span(f"Élő adatok frissítve: {data['frissites']} — {dam_cimke}{ido_txt}",
+                style={"fontSize":"12px","color":C['txt'],"fontWeight":"500"})
+        ])
 
     src=html.Div([src_sor(k,not v) for k,v in fb.items()])
 
     kat = "Negatív" if dam_most<0 else ("Olcsó" if dam_most<dam_atlag*0.7 else ("Drága" if dam_most>dam_atlag*1.3 else "Átlagos"))
     ksor=html.Div([
         kpi("Jelenlegi DAM ár",f"{dam_most:.0f} €/MWh",kat,dam_sz,t_dam),
-        kpi("Most (Fogyasztás)",f"{edf['fogyasztas'].iloc[min(ora,len(edf)-1)]:,.0f} MWh","Aktuális fogyasztás",C['bl'],t_fogy),
-        kpi("Budapest",f"{aho:.0f} °C","Most",C['yw']),
-        kpi("EUR/HUF",f"{eur_huf:.1f} Ft","Árfolyam",C['txt']),
-        kpi("Legolcsóbb időszak",f"{int(legolcs['ora']):02d}:00 – {legolcs['dam_ar']:.0f} €","Holnap" if data["dam_forras"]=="holnap" else "Ma",C['gr']),
-        kpi("STL Állapot",f"{stl_db} / {stl_tot}","Óra",C['or'] if stl_db > 0 else C['gr']),
+        kpi("Most (Fogyasztás)",
+            f"{edf['fogyasztas'].iloc[min(ora,len(edf)-1)]:,.0f} MWh" if edf is not None else "–",
+            "Aktuális fogyasztás" if edf is not None else "Előrejelzés nem elérhető",
+            C['bl'],t_fogy),
+        kpi("Budapest",f"{aho:.0f} °C" if aho is not None else "–","Most",C['yw']),
+        kpi("EUR/HUF",f"{eur_huf:.1f} Ft" if eur_huf is not None else "–","Árfolyam",C['txt']),
+        kpi("Legolcsóbb időszak",f"{int(legolcs['ora']):02d}:00 – {legolcs['dam_ar']:.0f} €",
+            "Holnap" if data["dam_forras"]=="holnap" else "Ma",C['gr']),
+        kpi("STL Állapot",f"{stl_db} / {stl_tot}" if data["stl"] else "–","Óra",
+            C['or'] if stl_db > 0 else C['gr']),
     ],style={"display":"flex","gap":"12px"})
 
     if oldal=="fooldal":
-        page=fooldal(edf,data,dam_atlag,eur_huf,legolcs,dam_most,dam_sz)
+        page=fooldal(dam_df,edf,data,dam_atlag,eur_huf,legolcs,dam_most,dam_sz)
     elif oldal=="elemzes":
-        page=elemzes(edf,data,dam_atlag)
+        page=elemzes(dam_df,edf,data,dam_atlag)
     else:
         page=mllabor(data)
     return statusz,ksor,page,src,modell_info,*ns
-
-def fooldal(edf,data,dam_atlag,eur_huf,legolcs,dam_most,dam_sz):
-    orak=[f"{int(r['ora']):02d}:00" for _,r in edf.iterrows()]
-    dam_vals=edf["dam_ar"].tolist()
+def fooldal(dam_df,edf,data,dam_atlag,eur_huf,legolcs,dam_most,dam_sz):
+    orak=[f"{int(o):02d}:00" for o in dam_df["ora"]]
+    dam_vals=dam_df["dam_ar"].tolist()
 
     fig_dam=go.Figure()
     fig_dam.add_trace(go.Scatter(x=orak,y=dam_vals,mode="lines+markers",
@@ -562,7 +677,7 @@ def fooldal(edf,data,dam_atlag,eur_huf,legolcs,dam_most,dam_sz):
                             margin=dict(l=20,r=20,t=20,b=20), height=140)
 
     varj=(int(legolcs['ora'])-datetime.now().hour)%24
-    top3=edf.nsmallest(3,"dam_ar")
+    top3=dam_df.nsmallest(3,"dam_ar")
     rk_c=[C['gr'], '#a3e635', C['yw']]
 
     fig_f=go.Figure()
@@ -571,17 +686,41 @@ def fooldal(edf,data,dam_atlag,eur_huf,legolcs,dam_most,dam_sz):
     lay2=dict(**CHART); lay2["height"]=150; lay2["margin"]=dict(l=30,r=10,t=10,b=25)
     fig_f.update_layout(**lay2)
 
-    # ---- ÉLŐ számítások (korábban beégetett értékek) ----
-    n_start, n_end, n_min, van_negativ = negativ_ablak(edf)
-    ar_min = float(edf["dam_ar"].min())
-    ar_max = float(edf["dam_ar"].max())
-    ar_atlag = float(edf["dam_ar"].mean())
-    ar_szoras = float(edf["dam_ar"].std())
+    n_start, n_end, n_min, van_negativ = negativ_ablak(dam_df)
+    ar_min = float(dam_df["dam_ar"].min())
+    ar_max = float(dam_df["dam_ar"].max())
+    ar_atlag = float(dam_df["dam_ar"].mean())
+    ar_szoras = float(dam_df["dam_ar"].std())
     volatilitas = "Magas" if ar_szoras > 40 else ("Közepes" if ar_szoras > 20 else "Alacsony")
     vol_szin = C['or'] if ar_szoras > 40 else (C['yw'] if ar_szoras > 20 else C['gr'])
     nap_cimke = "Holnap" if data["dam_forras"]=="holnap" else "Ma"
 
     m = ensemble.get("metrikak",{}).get("ensemble",{})
+
+    # Kalkulátor csak árfolyammal együtt értelmes
+    if eur_huf is not None:
+        kalk_panel = html.Div([
+            html.Div("🧮 MEGTAKARÍTÁS KALKULÁTOR",style={"fontSize":"11px","fontWeight":"600","color":C['wh'],"marginBottom":"12px"}),
+            html.Div([html.Span("Töltendő energia",style={"fontSize":"11px","color":C['mut']}),
+                      html.Span(id="kwh-txt",style={"fontSize":"11px","fontWeight":"bold","color":C['wh']})],
+                      style={"display":"flex","justifyContent":"space-between"}),
+            dcc.Slider(id="kwh-sl",min=5,max=80,value=40,step=5,marks=None),
+
+            html.Div([html.Span("Akkumulátor kapacitás",style={"fontSize":"11px","color":C['mut']}),
+                      html.Span("60 kWh",style={"fontSize":"11px","fontWeight":"bold","color":C['wh']})],
+                      style={"display":"flex","justifyContent":"space-between","marginTop":"8px"}),
+            dcc.Slider(min=20,max=100,value=60,step=10,marks=None,disabled=True),
+
+            html.Div(id="calc-out",style={"marginTop":"12px"})
+        ],style=CS)
+    else:
+        kalk_panel = html.Div([
+            hianyzo_panel("🧮 MEGTAKARÍTÁS KALKULÁTOR",
+                "Az EUR/HUF árfolyam jelenleg nem elérhető — a forintos számítás átmenetileg szünetel."),
+            html.Div([dcc.Slider(id="kwh-sl",min=5,max=80,value=40,step=5,marks=None),
+                      html.Span(id="kwh-txt"),html.Div(id="calc-out")],
+                     style={"display":"none"})
+        ])
 
     return html.Div([
         dbc.Row([
@@ -624,20 +763,7 @@ def fooldal(edf,data,dam_atlag,eur_huf,legolcs,dam_most,dam_sz):
         ],className="g-3 mb-3"),
 
         dbc.Row([
-            dbc.Col(html.Div([
-                html.Div("🧮 MEGTAKARÍTÁS KALKULÁTOR",style={"fontSize":"11px","fontWeight":"600","color":C['wh'],"marginBottom":"12px"}),
-                html.Div([html.Span("Töltendő energia",style={"fontSize":"11px","color":C['mut']}),
-                          html.Span(id="kwh-txt",style={"fontSize":"11px","fontWeight":"bold","color":C['wh']})],
-                          style={"display":"flex","justifyContent":"space-between"}),
-                dcc.Slider(id="kwh-sl",min=5,max=80,value=40,step=5,marks=None),
-
-                html.Div([html.Span("Akkumulátor kapacitás",style={"fontSize":"11px","color":C['mut']}),
-                          html.Span("60 kWh",style={"fontSize":"11px","fontWeight":"bold","color":C['wh']})],
-                          style={"display":"flex","justifyContent":"space-between","marginTop":"8px"}),
-                dcc.Slider(min=20,max=100,value=60,step=10,marks=None,disabled=True),
-
-                html.Div(id="calc-out",style={"marginTop":"12px"})
-            ],style=CS),md=3),
+            dbc.Col(kalk_panel,md=3),
 
             dbc.Col(html.Div([
                 html.Div("🎯 KÖVETKEZŐ NEGATÍV ÁR" if van_negativ else "🎯 LEGOLCSÓBB IDŐABLAK",
@@ -671,39 +797,48 @@ def fooldal(edf,data,dam_atlag,eur_huf,legolcs,dam_most,dam_sz):
         html.Div(f"Ensemble (XGBoost + LightGBM + CatBoost) — MAE: {m.get('mae',0):.2f} MWh — R²: {m.get('r2',0):.4f} — lag24h + lag168h mindig valós ENTSO-E adat",
             style={"textAlign":"center","color":C['mut'],"fontSize":"10px","marginTop":"24px","letterSpacing":".5px"})
     ])
+def elemzes(dam_df,edf,data,dam_atlag):
+    orak=[f"{int(o):02d}:00" for o in dam_df["ora"]]
 
-def elemzes(edf,data,dam_atlag):
-    orak=[f"{int(r['ora']):02d}:00" for _,r in edf.iterrows()]
+    if edf is not None:
+        fig=make_subplots(specs=[[{"secondary_y":True}]])
+        fig.add_trace(go.Scatter(x=orak[:len(edf)],y=edf["fogyasztas"].tolist(),name="Fogyasztás (MWh)",
+            mode="lines",fill="tozeroy",line=dict(color=C['bl'],width=2),
+            fillcolor="rgba(0,102,204,0.1)"),secondary_y=False)
+        fig.add_trace(go.Scatter(x=orak[:len(edf)],y=edf["homerseklet"].tolist(),name="Hőmérséklet (°C)",
+            mode="lines",line=dict(color=C['yw'],width=2,dash="dot")),secondary_y=True)
+        lay=dict(**CHART); lay["height"]=280; lay["showlegend"]=True
+        lay["legend"]=dict(orientation="h",yanchor="bottom",y=1.02,bgcolor="rgba(0,0,0,0)",font=dict(size=10,color=C['txt']))
+        lay["title"]=dict(text="Fogyasztás + hőmérséklet",font=dict(size=12,color=C['wh']))
+        fig.update_layout(**lay)
+        fig.update_yaxes(title_text="MWh",gridcolor=C['brd'],color=C['mut'],secondary_y=False)
+        fig.update_yaxes(title_text="°C",gridcolor="rgba(0,0,0,0)",color=C['mut'],secondary_y=True)
+        fogy_panel=html.Div([dcc.Graph(figure=fig,config={"displayModeBar":False})],style=CS)
+    else:
+        fogy_panel=hianyzo_panel("Fogyasztás + hőmérséklet",
+            "A fogyasztás-előrejelzéshez szükséges élő adatforrások egyike jelenleg nem elérhető. "
+            "A panel automatikusan megjelenik, amint minden forrás él.")
 
-    fig=make_subplots(specs=[[{"secondary_y":True}]])
-    fig.add_trace(go.Scatter(x=orak,y=edf["fogyasztas"].tolist(),name="Fogyasztás (MWh)",
-        mode="lines",fill="tozeroy",line=dict(color=C['bl'],width=2),
-        fillcolor="rgba(0,102,204,0.1)"),secondary_y=False)
-    fig.add_trace(go.Scatter(x=orak,y=edf["homerseklet"].tolist(),name="Hőmérséklet (°C)",
-        mode="lines",line=dict(color=C['yw'],width=2,dash="dot")),secondary_y=True)
-    lay=dict(**CHART); lay["height"]=280; lay["showlegend"]=True
-    lay["legend"]=dict(orientation="h",yanchor="bottom",y=1.02,bgcolor="rgba(0,0,0,0)",font=dict(size=10,color=C['txt']))
-    lay["title"]=dict(text="Fogyasztás + hőmérséklet",font=dict(size=12,color=C['wh']))
-    fig.update_layout(**lay)
-    fig.update_yaxes(title_text="MWh",gridcolor=C['brd'],color=C['mut'],secondary_y=False)
-    fig.update_yaxes(title_text="°C",gridcolor="rgba(0,0,0,0)",color=C['mut'],secondary_y=True)
+    daily=data.get("daily") or {}
+    n=min(4,len(daily.get("max",[]) or []))
+    if n>0:
+        ido_panel=html.Div([
+            html.Div("Időjárás előrejelzés",style={"fontSize":"11px","fontWeight":"500","color":C['wh'],"marginBottom":"12px"}),
+            html.Div([html.Div([
+                html.Div(ido_ikon(daily["code"][i] if i<len(daily.get("code",[])) else None),
+                    style={"fontSize":"22px","textAlign":"center"}),
+                html.Div("Holnap" if i==0 else f"+{i} nap",style={"fontSize":"8px","color":C['mut'],"textAlign":"center"}),
+                html.Div(f"{daily['max'][i]:.0f}°C" if daily['max'][i] is not None else "–",
+                    style={"fontSize":"14px","fontWeight":"500","color":C['or'],"textAlign":"center"}),
+                html.Div(f"{daily['min'][i]:.0f}°C" if daily['min'][i] is not None else "–",
+                    style={"fontSize":"9px","color":C['mut'],"textAlign":"center"})
+            ],style={"background":C['card2'],"borderRadius":"8px","padding":"10px","flex":"1"})
+            for i in range(n)],style={"display":"flex","gap":"8px"})
+        ],style=CS)
+    else:
+        ido_panel=hianyzo_panel("Időjárás előrejelzés","Időjárás-adat jelenleg egyik forrásból sem elérhető.")
 
-    daily=data.get("daily",{}); n=min(4,len(daily.get("max",[])))
-    ido_panel=html.Div([
-        html.Div("Időjárás előrejelzés",style={"fontSize":"11px","fontWeight":"500","color":C['wh'],"marginBottom":"12px"}),
-        html.Div([html.Div([
-            html.Div(ido_ikon(daily["code"][i] if n>0 and i<len(daily.get("code",[])) else None),
-                style={"fontSize":"22px","textAlign":"center"}),
-            html.Div("Holnap" if i==0 else f"+{i} nap",style={"fontSize":"8px","color":C['mut'],"textAlign":"center"}),
-            html.Div(f"{daily['max'][i]:.0f}°C" if n>0 and i<len(daily.get("max",[])) else "–",
-                style={"fontSize":"14px","fontWeight":"500","color":C['or'],"textAlign":"center"}),
-            html.Div(f"{daily['min'][i]:.0f}°C" if n>0 and i<len(daily.get("min",[])) else "–",
-                style={"fontSize":"9px","color":C['mut'],"textAlign":"center"})
-        ],style={"background":C['card2'],"borderRadius":"8px","padding":"10px","flex":"1"})
-        for i in range(max(n,1))],style={"display":"flex","gap":"8px"})
-    ],style=CS)
-
-    dam_vals=edf["dam_ar"].tolist()
+    dam_vals=dam_df["dam_ar"].tolist()
     szinek=[dam_szin(a,dam_atlag) for a in dam_vals]
     fig_d=go.Figure()
     for i in range(len(dam_vals)-1):
@@ -725,7 +860,7 @@ def elemzes(edf,data,dam_atlag):
     return html.Div([
         html.Div("Energiaelemzés",style={"fontSize":"16px","fontWeight":"600","color":C['wh'],"marginBottom":"14px"}),
         dbc.Row([
-            dbc.Col(html.Div([dcc.Graph(figure=fig,config={"displayModeBar":False})],style=CS),md=8),
+            dbc.Col(fogy_panel,md=8),
             dbc.Col(ido_panel,md=4)
         ],className="g-3 mb-3"),
         dbc.Row([
@@ -733,7 +868,6 @@ def elemzes(edf,data,dam_atlag):
             dbc.Col(html.Div([dcc.Graph(figure=fig_h,config={"displayModeBar":False})],style=CS),md=6)
         ],className="g-3")
     ])
-
 def mllabor(data):
     m=ensemble.get("metrikak",{}); s=ensemble.get("sulyok",{})
     em=m.get("ensemble",{}); xm=m.get("xgboost",{}); lm=m.get("lightgbm",{}); cm=m.get("catboost",{})
@@ -829,11 +963,12 @@ def mllabor(data):
 @callback([Output("kwh-txt","children"),Output("calc-out","children")],
     [Input("kwh-sl","value"),Input("adatok","data")])
 def kalk(kwh,data):
-    if data is None or data.get("kritikus_hiba"): return f"{kwh} kWh",html.Div()
-    edf=pd.DataFrame(data["eredm"]); eur=data["eur_huf"]; atl=data["dam_atlag"]
+    if data is None or data.get("kritikus_hiba") or data.get("eur_huf") is None:
+        return f"{kwh} kWh",html.Div()
+    eur=data["eur_huf"]; atl=data["dam_atlag"]
     ora=datetime.now().hour
     most=data["dam_oras"][ora] if ora<len(data["dam_oras"]) else atl
-    olcs=float(edf["dam_ar"].min())
+    olcs=float(min(data["dam_oras"]))
     m_ft=kwh*most*eur/1000; a_ft=kwh*olcs*eur/1000; meg=m_ft-a_ft
 
     return f"{kwh} kWh",html.Div([
