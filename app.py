@@ -8,12 +8,14 @@ import numpy as np
 import joblib
 import requests
 import os
+import time
 import base64
 from datetime import datetime, timedelta
 from io import StringIO
 from statsmodels.tsa.seasonal import STL
 import holidays
-
+from dotenv import load_dotenv
+load_dotenv()
 app = dash.Dash(__name__,
     external_stylesheets=[dbc.themes.BOOTSTRAP],
     suppress_callback_exceptions=True,
@@ -24,6 +26,35 @@ server = app.server
 BASE = os.path.dirname(os.path.abspath(__file__))
 ENTSOE_API_KEY = os.environ.get("ENTSOE_API_KEY","")
 hu_holidays = holidays.Hungary(years=[2025,2026,2027])
+
+# ============================================================
+# GYORSÍTÓTÁR (CACHE)
+# Minden API-eredményt időbélyeggel tárolunk. Újrahívás csak a
+# lejárat után történik. Ha egy API épp nem elérhető, a legutóbbi
+# jó adatot szolgáljuk ki — az app nem hal meg egy kimaradástól.
+# ============================================================
+CACHE = {}
+
+def cachelt(kulcs, ttl_sec, fn, ok_index):
+    """kulcs: cache azonosító | ttl_sec: érvényesség másodpercben
+    fn: a tényleges API-hívó függvény | ok_index: a visszatérési
+    tuple hányadik eleme a sikerjelző (True/False)"""
+    most = time.time()
+    rec = CACHE.get(kulcs)
+    # Van friss, jó adatunk? — nem hívunk API-t
+    if rec and (most - rec["ido"]) < ttl_sec:
+        return rec["ertek"]
+    # Lejárt vagy nincs: tényleges hívás
+    ertek = fn()
+    if ertek[ok_index]:
+        CACHE[kulcs] = {"ido": most, "ertek": ertek}
+        return ertek
+    # A hívás sikertelen: ha van korábbi jó adat, azt adjuk vissza
+    if rec:
+        print(f"[CACHE] {kulcs}: friss hívás sikertelen, korábbi jó adat kiszolgálva "
+              f"({int((most-rec['ido'])/60)} perce frissült)", flush=True)
+        return rec["ertek"]
+    return ertek
 
 FEATURES = ['DAM_EUR_MWh','Homerseklet_C','Paratartalom_szazalek','Napsugarzas_W_m2',
     'Szelsebesseg_kmh','Csapadek_mm','EUR_HUF','Ora','Het_napja','Honap','Unnepnap','Hetvege',
@@ -100,44 +131,62 @@ def get_eur_huf():
         df = pd.read_csv(StringIO(r.text))[["TIME_PERIOD","OBS_VALUE"]].dropna()
         df["OBS_VALUE"] = pd.to_numeric(df["OBS_VALUE"],errors="coerce")
         return float(df["OBS_VALUE"].dropna().iloc[-1]),True
-    except:
+    except Exception as e:
+        print(f"[HIBA] ECB árfolyam: {e}", flush=True)
         return None,False
 
 def get_ho():
-    try:
-        r = requests.get("https://api.open-meteo.com/v1/forecast",
-            params={"latitude":47.5,"longitude":19.0,"current_weather":"true","timezone":"Europe/Budapest"},timeout=10)
-        return float(r.json()["current_weather"]["temperature"]),True
-    except:
-        return None,False
+    for kiserlet in range(3):
+        try:
+            r = requests.get("https://api.open-meteo.com/v1/forecast",
+                params={"latitude":47.5,"longitude":19.0,"current_weather":"true","timezone":"Europe/Budapest"},timeout=10)
+            d = r.json()
+            if "current_weather" not in d:
+                print(f"[HIBA] Open-Meteo (hőmérséklet) {kiserlet+1}. kísérlet — HTTP {r.status_code}, válasz: {str(d)[:200]}", flush=True)
+                time.sleep(3)
+                continue
+            return float(d["current_weather"]["temperature"]),True
+        except Exception as e:
+            print(f"[HIBA] Open-Meteo (hőmérséklet) {kiserlet+1}. kísérlet: {e}", flush=True)
+            time.sleep(3)
+    return None,False
 
 def get_idojaras():
-    try:
-        ma = datetime.now().replace(hour=0,minute=0,second=0,microsecond=0)
-        r = requests.get("https://api.open-meteo.com/v1/forecast",
-            params={"latitude":47.5,"longitude":19.0,
-                "hourly":"temperature_2m,relative_humidity_2m,direct_radiation,wind_speed_10m,precipitation",
-                "daily":"temperature_2m_max,temperature_2m_min,weathercode",
-                "timezone":"Europe/Budapest",
-                "start_date":(ma+timedelta(days=1)).strftime("%Y-%m-%d"),
-                "end_date":(ma+timedelta(days=4)).strftime("%Y-%m-%d")},timeout=15)
-        d = r.json()
-        hourly = pd.DataFrame({"Datum":pd.to_datetime(d["hourly"]["time"]),
-            "Homerseklet_C":d["hourly"]["temperature_2m"],
-            "Paratartalom_szazalek":d["hourly"]["relative_humidity_2m"],
-            "Napsugarzas_W_m2":d["hourly"]["direct_radiation"],
-            "Szelsebesseg_kmh":d["hourly"]["wind_speed_10m"],
-            "Csapadek_mm":d["hourly"]["precipitation"]})
-        holnap = (ma+timedelta(days=1)).date()
-        hourly = hourly[hourly["Datum"].dt.date==holnap].reset_index(drop=True)
-        daily = {"max":d["daily"]["temperature_2m_max"][:4],
-                 "min":d["daily"]["temperature_2m_min"][:4],
-                 "code":d["daily"]["weathercode"][:4]}
-        if len(hourly)==0:
-            return None,None,False
-        return hourly,daily,True
-    except:
-        return None,None,False
+    for kiserlet in range(3):
+        try:
+            ma = datetime.now().replace(hour=0,minute=0,second=0,microsecond=0)
+            r = requests.get("https://api.open-meteo.com/v1/forecast",
+                params={"latitude":47.5,"longitude":19.0,
+                    "hourly":"temperature_2m,relative_humidity_2m,direct_radiation,wind_speed_10m,precipitation",
+                    "daily":"temperature_2m_max,temperature_2m_min,weathercode",
+                    "timezone":"Europe/Budapest",
+                    "start_date":(ma+timedelta(days=1)).strftime("%Y-%m-%d"),
+                    "end_date":(ma+timedelta(days=4)).strftime("%Y-%m-%d")},timeout=15)
+            d = r.json()
+            if "hourly" not in d:
+                print(f"[HIBA] Open-Meteo (előrejelzés) {kiserlet+1}. kísérlet — HTTP {r.status_code}, válasz: {str(d)[:200]}", flush=True)
+                time.sleep(3)
+                continue
+            hourly = pd.DataFrame({"Datum":pd.to_datetime(d["hourly"]["time"]),
+                "Homerseklet_C":d["hourly"]["temperature_2m"],
+                "Paratartalom_szazalek":d["hourly"]["relative_humidity_2m"],
+                "Napsugarzas_W_m2":d["hourly"]["direct_radiation"],
+                "Szelsebesseg_kmh":d["hourly"]["wind_speed_10m"],
+                "Csapadek_mm":d["hourly"]["precipitation"]})
+            holnap = (ma+timedelta(days=1)).date()
+            hourly = hourly[hourly["Datum"].dt.date==holnap].reset_index(drop=True)
+            daily = {"max":d["daily"]["temperature_2m_max"][:4],
+                     "min":d["daily"]["temperature_2m_min"][:4],
+                     "code":d["daily"]["weathercode"][:4]}
+            if len(hourly)==0:
+                print("[HIBA] Open-Meteo (előrejelzés): üres válasz a holnapi napra", flush=True)
+                time.sleep(3)
+                continue
+            return hourly,daily,True
+        except Exception as e:
+            print(f"[HIBA] Open-Meteo (előrejelzés) {kiserlet+1}. kísérlet: {e}", flush=True)
+            time.sleep(3)
+    return None,None,False
 
 def get_dam():
     """Holnapi DAM árak. Publikálás előtt (kb. 14:00-ig) a MAI valós
@@ -146,7 +195,7 @@ def get_dam():
         return None,None,False,"nincs_kulcs"
     try:
         from entsoe import EntsoePandasClient
-        c = EntsoePandasClient(api_key=ENTSOE_API_KEY)
+        c = EntsoePandasClient(api_key=ENTSOE_API_KEY, timeout=30)
         ma = datetime.now().replace(hour=0,minute=0,second=0,microsecond=0)
         # 1. próba: holnapi árak
         hs = pd.Timestamp((ma+timedelta(days=1)).strftime("%Y-%m-%d"),tz="Europe/Budapest")
@@ -161,8 +210,10 @@ def get_dam():
         ho = c.query_day_ahead_prices("HU",start=ms,end=ms+pd.Timedelta(days=1))
         if ho is not None and len(ho)>=20:
             return float(ho.mean()),ho,True,"ma"
+        print("[HIBA] ENTSO-E (DAM): sem holnapi, sem mai ár nem érkezett", flush=True)
         return None,None,False,"nincs_adat"
-    except:
+    except Exception as e:
+        print(f"[HIBA] ENTSO-E (DAM árak): {e}", flush=True)
         return None,None,False,"api_hiba"
 
 def get_load():
@@ -171,37 +222,51 @@ def get_load():
         return None,False
     try:
         from entsoe import EntsoePandasClient
-        c = EntsoePandasClient(api_key=ENTSOE_API_KEY)
+        c = EntsoePandasClient(api_key=ENTSOE_API_KEY, timeout=30)
         ma = datetime.now().replace(hour=0,minute=0,second=0,microsecond=0)
         s = pd.Timestamp((ma-timedelta(days=8)).strftime("%Y-%m-%d"),tz="Europe/Budapest")
         e = pd.Timestamp(ma.strftime("%Y-%m-%d"),tz="Europe/Budapest")
         load = c.query_load("HU",start=s,end=e)
         if isinstance(load,pd.DataFrame): load=load.iloc[:,0]
         if load is None or len(load)<168:
+            print(f"[HIBA] ENTSO-E (fogyasztás): kevés adat érkezett ({0 if load is None else len(load)} sor, minimum 168 kell)", flush=True)
             return None,False
         return load,True
-    except:
+    except Exception as e:
+        print(f"[HIBA] ENTSO-E (fogyasztás): {e}", flush=True)
         return None,False
 
 def get_megujulo():
-    """Elmúlt 7 nap átlagos nap- és szélenergia-termelése — ÉLŐ ENTSO-E."""
+    """Elmúlt 7 nap átlagos nap- és szélenergia-termelése — ÉLŐ ENTSO-E.
+    Szűkített lekérdezés: csak a nap (B16) és a szárazföldi szél (B19)
+    termeléstípus jön le — a többi erőműtípus adata felesleges lenne."""
     if not ENTSOE_API_KEY:
+        print("[HIBA] Megújuló: nincs ENTSOE_API_KEY beállítva", flush=True)
         return None,None,False
     try:
         from entsoe import EntsoePandasClient
-        c = EntsoePandasClient(api_key=ENTSOE_API_KEY)
+        c = EntsoePandasClient(api_key=ENTSOE_API_KEY, timeout=30)
         ma = datetime.now().replace(hour=0,minute=0,second=0,microsecond=0)
         s = pd.Timestamp((ma-timedelta(days=7)).strftime("%Y-%m-%d"),tz="Europe/Budapest")
         e = pd.Timestamp(ma.strftime("%Y-%m-%d"),tz="Europe/Budapest")
-        g = c.query_generation("HU",start=s,end=e)
-        sc=[x for x in g.columns if 'Solar' in str(x)]
-        wc=[x for x in g.columns if 'Wind' in str(x)]
-        if not sc and not wc:
+        nap = None; szel = None
+        try:
+            g_nap = c.query_generation("HU",start=s,end=e,psr_type="B16")
+            if isinstance(g_nap,pd.DataFrame): g_nap = g_nap.sum(axis=1)
+            nap = float(g_nap.mean())
+        except Exception as e1:
+            print(f"[HIBA] Megújuló (nap, B16): {e1}", flush=True)
+        try:
+            g_szel = c.query_generation("HU",start=s,end=e,psr_type="B19")
+            if isinstance(g_szel,pd.DataFrame): g_szel = g_szel.sum(axis=1)
+            szel = float(g_szel.mean())
+        except Exception as e2:
+            print(f"[HIBA] Megújuló (szél, B19): {e2}", flush=True)
+        if nap is None and szel is None:
             return None,None,False
-        nap = float(g[sc].sum(1).mean()) if sc else 0.0
-        szel = float(g[wc].sum(1).mean()) if wc else 0.0
-        return nap,szel,True
-    except:
+        return (nap if nap is not None else 0.0),(szel if szel is not None else 0.0),True
+    except Exception as e:
+        print(f"[HIBA] Megújuló termelés: {e}", flush=True)
         return None,None,False
 
 def elorejelez(ido_df,dam_atlag,eur_huf,load_hist,nap,szel,dam_oras):
@@ -326,7 +391,7 @@ app.layout = html.Div([
         html.Div(id="statusz",style={"marginBottom":"16px"}),
         html.Div(id="kpi-sor",style={"marginBottom":"16px"}),
         html.Div(id="oldal-content"),
-        dcc.Interval(id="refresh",interval=300*1000,n_intervals=0),
+        dcc.Interval(id="refresh",interval=1800*1000,n_intervals=0),
         dcc.Store(id="oldal",data="fooldal"),
         dcc.Store(id="adatok",data=None),
     ],style={"marginLeft":"230px","padding":"24px 28px","background":C['bg'],"minHeight":"100vh"})
@@ -337,12 +402,12 @@ def fetch(n):
     if ensemble is None:
         return {"kritikus_hiba":True,"hianyzo":[],"modell_hiba":MODELL_HIBA}
 
-    eur_huf,eur_ok = get_eur_huf()
-    ido_df,daily,ido_ok = get_idojaras()
-    dam_atlag,dam_oras,dam_ok,dam_forras = get_dam()
-    load,load_ok = get_load()
-    nap,szel,gen_ok = get_megujulo()
-    aho,ho_ok = get_ho()
+    eur_huf,eur_ok = cachelt("ecb", 6*3600, get_eur_huf, 1)
+    ido_df,daily,ido_ok = cachelt("idojaras", 3600, get_idojaras, 2)
+    dam_atlag,dam_oras,dam_ok,dam_forras = cachelt("dam", 3600, get_dam, 2)
+    load,load_ok = cachelt("load", 3600, get_load, 1)
+    nap,szel,gen_ok = cachelt("megujulo", 3600, get_megujulo, 2)
+    aho,ho_ok = cachelt("homerseklet", 3600, get_ho, 1)
 
     hianyzo = []
     if not dam_ok: hianyzo.append("ENTSO-E (DAM árak)")
