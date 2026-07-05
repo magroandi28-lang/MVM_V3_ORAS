@@ -1,0 +1,165 @@
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #050d1a;
+}
+
+.app-shell {
+  min-height: 100vh;
+  background: #050d1a;
+  color: #cbd5e1;
+  font-family: Inter, sans-serif;
+}
+
+.app-header {
+  min-height: 68px;
+  background: #070f1e;
+  border-bottom: 1px solid #1a2d42;
+}
+
+.app-header-inner {
+  width: min(1480px, calc(100% - 40px));
+  min-height: 68px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.brand-mark {
+  width: 38px;
+  height: 38px;
+  border: 1px solid #10b981;
+  color: #10b981;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.brand-name {
+  color: #f1f5f9;
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.brand-subtitle {
+  margin-top: 5px;
+  color: #64748b;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+}
+
+.header-meta {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.live-badge {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  border: 1px solid #10b981;
+  color: #10b981;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.header-status {
+  min-width: 0;
+}
+
+.header-status > div {
+  margin: 0 !important;
+}
+
+.app-main {
+  width: min(1480px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 34px 0 40px;
+}
+
+.kpi-strip {
+  margin-bottom: 18px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.kpi-strip > div {
+  min-width: max-content;
+}
+
+.nav-tabs-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 28px;
+  border-bottom: 1px solid #1a2d42;
+}
+
+.nav-tab {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: color 160ms ease, border-color 160ms ease;
+}
+
+.nav-tab:hover {
+  color: #f1f5f9 !important;
+}
+
+@media (max-width: 760px) {
+  .app-header-inner,
+  .app-main {
+    width: min(100% - 24px, 1480px);
+  }
+
+  .app-header-inner {
+    padding: 10px 0;
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .header-meta {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .header-status {
+    overflow: hidden;
+  }
+
+  .app-main {
+    padding-top: 20px;
+  }
+
+  .nav-tab {
+    min-height: 44px;
+    padding: 10px 6px;
+    font-size: 11px;
+  }
+}
