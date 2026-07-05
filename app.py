@@ -21,7 +21,7 @@ app = dash.Dash(__name__,
     external_stylesheets=[dbc.themes.BOOTSTRAP],
     suppress_callback_exceptions=True,
     meta_tags=[{"name":"viewport","content":"width=device-width,initial-scale=1"}])
-app.title = "OkosMérő.hu"
+app.title = "OkosMérő"
 server = app.server
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -440,50 +440,49 @@ def hianyzo_panel(cim, uzenet):
         ],style={"display":"flex","flexDirection":"column","justifyContent":"center","flex":"1","padding":"20px 10px"})
     ],style={**CS,"display":"flex","flexDirection":"column"})
 
-SIDEBAR = html.Div([
+HEADER = html.Header([
     html.Div([
-        html.Span("⚡",style={"fontSize":"24px"}),
-        html.Span("Okos",style={"fontSize":"18px","fontWeight":"800","color":C['wh']}),
-        html.Span("Mérő",style={"fontSize":"18px","fontWeight":"800","color":C['gr']}),
-        html.Span(".hu",style={"fontSize":"18px","fontWeight":"800","color":C['wh']}),
-    ],style={"display":"flex","alignItems":"center","gap":"6px","marginBottom":"2px"}),
-    html.Div("ENERGIAPIACI ASSZISZTENS",style={"fontSize":"9px","color":C['cy'],"letterSpacing":"1.5px","marginBottom":"30px"}),
+        html.Div([
+            html.Div("OM",className="brand-mark"),
+            html.Div([
+                html.Div("OkosMérő",className="brand-name"),
+                html.Div("ENERGIAPIACI IRÁNYÍTÓPULT",className="brand-subtitle")
+            ])
+        ],className="brand-lockup"),
+        html.Div([
+            html.Span("ÉLŐ ADAT",className="live-badge"),
+            html.Div(id="statusz",className="header-status")
+        ],className="header-meta")
+    ],className="app-header-inner")
+],className="app-header")
 
-    *[html.Div([
-        html.I(className=f"fa-solid {ikon}",style={"width":"18px","fontSize":"14px"}),
-        html.Span(nev,style={"marginLeft":"12px","fontSize":"13px","fontWeight":"500"})
-    ],id=f"nav-{oid}",n_clicks=0,style={"display":"flex","alignItems":"center","padding":"12px 16px",
-        "borderRadius":"10px","cursor":"pointer","marginBottom":"6px","transition":"all 0.2s",
-        "color":C['or'] if oid=="fooldal" else C['mut'],
-        "background":"rgba(255,102,0,0.1)" if oid=="fooldal" else "transparent"})
-    for ikon,nev,oid in [("fa-house","Főoldal","fooldal"),
-                          ("fa-chart-line","Energiaelemzés","elemzes"),
-                          ("fa-flask","ML Modell Labor","mllabor")]],
-
-    html.Div(style={"flex":"1"}),
-
-    html.Div([
-        html.Div("Adatkapcsolat",style={"fontSize":"11px","fontWeight":"600","color":C['wh'],"marginBottom":"8px"}),
-        html.Div(id="src-panel")
-    ],style={"background":"rgba(26,45,66,0.2)","border":f"1px solid {C['brd']}","borderRadius":"10px","padding":"12px"}),
-
-    html.Div(id="modell-panel",style={"marginTop":"12px","padding":"0 4px"})
-],style={"width":"230px","minWidth":"230px","background":C['sb'],
-    "borderRight":f"1px solid {C['brd']}","padding":"24px 16px",
-    "display":"flex","flexDirection":"column","minHeight":"100vh",
-    "position":"fixed","top":"0","left":"0","bottom":"0","zIndex":"100"})
+NAV_TABS = html.Div([
+    html.Div("Főoldal",id="nav-fooldal",n_clicks=0,
+        style={"color":C['gr'],"borderBottom":f"2px solid {C['gr']}"},
+        className="nav-tab"),
+    html.Div("Energiaelemzés",id="nav-elemzes",n_clicks=0,
+        style={"color":C['mut'],"borderBottom":"2px solid transparent"},
+        className="nav-tab"),
+    html.Div("ML Modell Labor",id="nav-mllabor",n_clicks=0,
+        style={"color":C['mut'],"borderBottom":"2px solid transparent"},
+        className="nav-tab")
+],className="nav-tabs-row")
 
 app.layout = html.Div([
-    SIDEBAR,
-    html.Div([
-        html.Div(id="statusz",style={"marginBottom":"16px"}),
-        html.Div(id="kpi-sor",style={"marginBottom":"16px"}),
+    HEADER,
+    html.Main([
+        html.Div(id="kpi-sor",className="kpi-strip"),
+        NAV_TABS,
         html.Div(id="oldal-content"),
+        html.Div([
+            html.Div(id="src-panel"),
+            html.Div(id="modell-panel")
+        ],style={"display":"none"}),
         dcc.Interval(id="refresh",interval=1800*1000,n_intervals=0),
         dcc.Store(id="oldal",data="fooldal"),
         dcc.Store(id="adatok",data=None),
-    ],style={"marginLeft":"230px","padding":"24px 28px","background":C['bg'],"minHeight":"100vh"})
-],style={"fontFamily":"Inter,sans-serif","background":C['bg']})
+    ],className="app-main")
+],className="app-shell")
 
 @callback(Output("adatok","data"),Input("refresh","n_intervals"))
 def fetch(n):
@@ -552,7 +551,9 @@ def nav(*_):
     if not ctx.triggered: return "fooldal"
     return ctx.triggered[0]["prop_id"].split(".")[0].replace("nav-","")
 
-NB = {"display":"flex","alignItems":"center","padding":"12px 16px","borderRadius":"10px","cursor":"pointer","marginBottom":"6px","transition":"all 0.2s"}
+NB = {"display":"flex","alignItems":"center","justifyContent":"center",
+    "padding":"14px 12px","cursor":"pointer","transition":"all 0.2s",
+    "background":"transparent"}
 
 @callback([Output("statusz","children"),Output("kpi-sor","children"),
     Output("oldal-content","children"),Output("src-panel","children"),
@@ -560,8 +561,9 @@ NB = {"display":"flex","alignItems":"center","padding":"12px 16px","borderRadius
     Output("nav-fooldal","style"),Output("nav-elemzes","style"),Output("nav-mllabor","style")],
     [Input("adatok","data"),Input("oldal","data")])
 def render(data,oldal):
-    ns=[{**NB,"color":C['or'],"background":"rgba(255,102,0,0.1)"} if oldal==x
-        else {**NB,"color":C['mut'],"background":"transparent"} for x in ["fooldal","elemzes","mllabor"]]
+    ns=[{**NB,"color":C['gr'],"borderBottom":f"2px solid {C['gr']}"} if oldal==x
+        else {**NB,"color":C['mut'],"borderBottom":"2px solid transparent"}
+        for x in ["fooldal","elemzes","mllabor"]]
 
     modell_info = html.Div([
         html.Div("Modell Futómű",style={"fontSize":"9px","color":C['cy'],"fontWeight":"bold"}),
