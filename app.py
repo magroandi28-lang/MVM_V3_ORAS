@@ -461,7 +461,7 @@ def toltes_ajanlas(ma_negyed):
             "neg_kezd":neg_kezd.isoformat() if neg_kezd else None,
             "neg_veg":neg_veg.isoformat() if neg_veg else None,
             "most_jo":most_jo,"hatra_perc":hatra_perc,"akt_ar":float(akt_ar),
-            "grafikon":{"ido":[t.isoformat() for t in t_lista],"ar":a_lista}}
+            "grafikon":{"ido":[t.isoformat() for t in idok],"ar":arak}}
 
 def visszaszamlalo(cel):
     """'1 óra 24 perc múlva' formátum."""
@@ -769,88 +769,157 @@ def fooldal(data):
     most = datetime.now()
     fo_kezd = datetime.fromisoformat(aj["fo_kezd"])
     fo_veg = datetime.fromisoformat(aj["fo_veg"])
+    toltheto = bool(aj["most_jo"])
 
-    # --- Fő üzenet a 3 állapot szerint ---
-    if aj["most_jo"]:
-        badge = html.Div("TÖLTS MOST",style={"display":"inline-block","padding":"4px 12px",
-            "background":"rgba(16,185,129,0.15)","border":f"1px solid {C['gr']}",
-            "color":C['gr'],"fontSize":"12px","fontWeight":"800","letterSpacing":"1px","marginBottom":"10px"})
-        fo_sor = html.Div(f"{aj['akt_ar']:.0f} €/MWh",
-            style={"fontSize":"44px","fontWeight":"800","color":C['gr'],"lineHeight":"1.05"})
-        al_sor = html.Div(f"még {aj['hatra_perc']} perc",
-            style={"fontSize":"14px","color":C['txt'],"marginTop":"6px"})
-    elif aj["negativ"]:
-        nk = datetime.fromisoformat(aj["neg_kezd"]); nv = datetime.fromisoformat(aj["neg_veg"])
-        badge = html.Div("NEGATÍV ÁR",style={"display":"inline-block","padding":"4px 12px",
-            "background":"rgba(16,185,129,0.15)","border":f"1px solid {C['gr']}",
-            "color":C['gr'],"fontSize":"12px","fontWeight":"800","letterSpacing":"1px","marginBottom":"10px"})
-        fo_sor = html.Div(f"{nk:%H:%M}–{nv:%H:%M}",
-            style={"fontSize":"44px","fontWeight":"800","color":C['wh'],"lineHeight":"1.05"})
-        al_sor = html.Div([
-            html.Span(visszaszamlalo(nk),style={"color":C['txt']}),
-            html.Span(f" · {aj['fo_min']:.0f} €/MWh",style={"color":C['gr'],"fontWeight":"700"})
-        ],style={"fontSize":"14px","marginTop":"6px"})
+    if aj["negativ"] and aj.get("neg_kezd") and aj.get("neg_veg"):
+        ajanlott_kezd = datetime.fromisoformat(aj["neg_kezd"])
+        ajanlott_veg = datetime.fromisoformat(aj["neg_veg"])
+        ajanlott_ar = float(aj["fo_min"])
     else:
-        badge = html.Div("LEGJOBB IDŐSZAK MA",style={"display":"inline-block","padding":"4px 12px",
-            "background":"rgba(255,102,0,0.12)","border":f"1px solid {C['or']}",
-            "color":C['or'],"fontSize":"12px","fontWeight":"800","letterSpacing":"1px","marginBottom":"10px"})
-        fo_sor = html.Div(f"{fo_kezd:%H:%M}–{fo_veg:%H:%M}",
-            style={"fontSize":"44px","fontWeight":"800","color":C['wh'],"lineHeight":"1.05"})
-        al_sor = html.Div([
-            html.Span(visszaszamlalo(fo_kezd),style={"color":C['txt']}),
-            html.Span(f" · {aj['fo_ar']:.0f} €/MWh",style={"color":C['gr'],"fontWeight":"700"})
-        ],style={"fontSize":"14px","marginTop":"6px"})
+        ajanlott_kezd = fo_kezd
+        ajanlott_veg = fo_veg
+        ajanlott_ar = float(aj["fo_ar"])
 
-    altok = html.Div([
+    def hatralevo(cel):
+        perc = max(0, int((cel - most).total_seconds() // 60))
+        ora, perc = divmod(perc, 60)
+        return f"{ora} óra {perc} perc" if ora else f"{perc} perc"
+
+    if toltheto:
+        dontes = "IGEN"
+        dontes_seged = "Még"
+        dontes_ido = f"{aj['hatra_perc']} perc"
+        idoszak_cimke = "Kedvező időszak vége"
+        idoszak = f"{ajanlott_veg:%H:%M}"
+        dontes_ar = float(aj["akt_ar"])
+    else:
+        dontes = "NEM"
+        dontes_seged = "Várj még"
+        dontes_ido = hatralevo(ajanlott_kezd)
+        idoszak_cimke = "Következő optimális időszak"
+        idoszak = f"{ajanlott_kezd:%H:%M} – {ajanlott_veg:%H:%M}"
+        dontes_ar = ajanlott_ar
+
+    terv = [(ajanlott_kezd, ajanlott_veg, ajanlott_ar)]
+    for ido, ar in aj.get("altok", []):
+        kezd = datetime.fromisoformat(ido)
+        terv.append((kezd, kezd + timedelta(hours=1), float(ar)))
+
+    terv_sorok = [
         html.Div([
-            html.Span(f"{datetime.fromisoformat(t):%H:%M}",
-                style={"fontSize":"13px","fontWeight":"700","color":C['txt']}),
-            html.Span(f"  {a:.0f} €",style={"fontSize":"13px","color":C['mut']})
-        ],style={"padding":"6px 14px","background":C['card2'],
-            "border":f"1px solid {C['brd']}","borderRadius":"8px"})
-        for t,a in aj.get("altok",[])
-    ],style={"display":"flex","gap":"10px","marginTop":"14px"}) if aj.get("altok") else html.Div()
+            html.Span(f"{kezd:%H:%M} – {veg:%H:%M}",className="charge-plan-time"),
+            html.Span(f"{ar:.0f} €/MWh",className="charge-plan-price")
+        ],className="charge-plan-row")
+        for kezd,veg,ar in terv[:3]
+    ]
 
-    # --- Minigrafikon: mostantól éjfélig ---
+    # --- Mai árgörbe: a múlt visszafogott, a hátralévő idő hangsúlyos ---
     g = aj["grafikon"]
     idok = [datetime.fromisoformat(t) for t in g["ido"]]
     arak = g["ar"]
-    x = [t.strftime("%H:%M") for t in idok]
+    most_i = int(np.argmin([abs((t-most).total_seconds()) for t in idok]))
+
+    def ar_szin(ar):
+        if ar < -10:
+            return "#00c98d"
+        if ar < 0:
+            return "#28d7b0"
+        if ar < 50:
+            return "#c7df20"
+        if ar < 100:
+            return "#ff9f1c"
+        return "#ef4444"
 
     fig = go.Figure()
-    # negatív tartomány zöld kitöltése
+    pozitiv_y = [max(a,0) for a in arak]
     neg_y = [min(a,0) for a in arak]
-    if any(a < 0 for a in arak):
-        fig.add_trace(go.Scatter(x=x,y=neg_y,mode="lines",
-            line=dict(width=0),fill="tozeroy",fillcolor="rgba(16,185,129,0.25)",
+    if any(a > 0 for a in arak):
+        fig.add_trace(go.Scatter(x=idok,y=pozitiv_y,mode="lines",
+            line=dict(width=0),fill="tozeroy",fillcolor="rgba(255,102,0,0.10)",
             hoverinfo="skip"))
-    fig.add_trace(go.Scatter(x=x,y=arak,mode="lines",
-        line=dict(color=C['or'],width=2),
-        hovertemplate="%{x}<br>%{y:.0f} €/MWh<extra></extra>"))
+    if any(a < 0 for a in arak):
+        fig.add_trace(go.Scatter(x=idok,y=neg_y,mode="lines",
+            line=dict(width=0),fill="tozeroy",fillcolor="rgba(16,185,129,0.16)",
+            hoverinfo="skip"))
+
+    for i in range(len(idok)-1):
+        fig.add_trace(go.Scatter(
+            x=[idok[i],idok[i+1]],y=[arak[i],arak[i+1]],mode="lines",
+            line=dict(color=ar_szin((arak[i]+arak[i+1])/2),width=2.5),
+            opacity=0.42 if idok[i] < most else 1,
+            hoverinfo="skip",showlegend=False))
+
+    fig.add_trace(go.Scatter(x=idok,y=arak,mode="markers",
+        marker=dict(size=8,color="rgba(0,0,0,0)"),
+        hovertemplate="%{x|%H:%M}<br>%{y:.0f} €/MWh<extra></extra>"))
     fig.add_hline(y=0,line=dict(color=C['mut'],width=1))
-    # ajánlott időszak halvány sávja
-    def idx_of(dt):
-        return int(np.argmin([abs((t-dt).total_seconds()) for t in idok]))
-    fig.add_vrect(x0=x[idx_of(fo_kezd)], x1=x[min(idx_of(fo_veg),len(x)-1)],
-        fillcolor="rgba(241,245,249,0.07)", line_width=0)
-    tick_n = max(1, len(x)//5)
+    fig.add_vrect(x0=ajanlott_kezd,x1=ajanlott_veg,
+        fillcolor="rgba(16,185,129,0.12)" if toltheto else "rgba(255,102,0,0.10)",
+        line_width=0)
+    fig.add_shape(type="line",x0=most,x1=most,y0=0,y1=1,yref="paper",
+        line=dict(color=C['wh'],width=1,dash="dot"))
+    fig.add_trace(go.Scatter(x=[idok[most_i]],y=[arak[most_i]],mode="markers",
+        marker=dict(size=9,color=C['wh'],line=dict(width=2,color=ar_szin(arak[most_i]))),
+        hoverinfo="skip",showlegend=False))
+    fig.add_annotation(x=idok[most_i],y=arak[most_i],
+        text=f"<b>{arak[most_i]:.0f} €</b><br>{idok[most_i]:%H:%M}",
+        showarrow=True,arrowhead=0,ax=34,ay=-42,
+        bgcolor="#0f1d31",bordercolor=C['brd'],borderwidth=1,borderpad=7,
+        font=dict(color=C['wh'],size=10))
     fig.update_layout(paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)',
         font=dict(color=C['mut'],family='Inter,sans-serif',size=10),
-        margin=dict(l=35,r=15,t=8,b=25),height=190,showlegend=False,
-        xaxis=dict(showgrid=False,color=C['mut'],tickvals=x[::tick_n]),
-        yaxis=dict(showgrid=False,color=C['mut'],ticksuffix=" €"))
+        margin=dict(l=48,r=20,t=36,b=30),height=270,showlegend=False,
+        hovermode="closest",
+        xaxis=dict(type="date",showgrid=False,color=C['mut'],
+            tickformat="%H:%M",dtick=4*60*60*1000,fixedrange=True,
+            range=[idok[0],idok[0]+timedelta(days=1)]),
+        yaxis=dict(gridcolor=C['brd'],color=C['mut'],ticksuffix=" €",
+            zeroline=False,fixedrange=True))
 
     return html.Div([
+        html.Div("MIKOR TÖLTS MA?",className="charge-eyebrow"),
         html.Div([
-            html.Div("MIKOR TÖLTS MA?",style={"fontSize":"11px","fontWeight":"700",
-                "color":C['mut'],"letterSpacing":"1.5px","marginBottom":"14px"}),
-            badge, fo_sor, al_sor, altok,
-            html.Div([dcc.Graph(figure=fig,config={"displayModeBar":False})],
-                style={"marginTop":"18px"}),
-            html.Div("Mai negyedórás DAM árak mostantól éjfélig — a kiemelt sáv az ajánlott időszak",
-                style={"fontSize":"9px","color":C['mut'],"textAlign":"center"})
-        ],style={**CS,"maxWidth":"860px","margin":"0 auto","padding":"28px 32px"})
-    ])
+            html.Div([
+                html.Img(src="/assets/tesla-charge.png",
+                    alt="Elektromos autó",className="charge-car"),
+                html.Div("Mai töltési állapot",className="charge-car-label")
+            ],className="charge-car-showcase"),
+            html.Div([
+                html.Div([
+                    html.Div(dontes,className="charge-decision"),
+                    html.Div(dontes_seged,className="charge-decision-helper"),
+                    html.Div(dontes_ido,className="charge-countdown"),
+                    html.Div(idoszak_cimke,className="charge-next-label"),
+                    html.Div(idoszak,className="charge-next-period"),
+                    html.Div(f"{dontes_ar:.0f} €/MWh",className="charge-next-price")
+                ],className=f"charge-gauge {'is-ready' if toltheto else 'is-waiting'}"),
+                html.Details([
+                    html.Summary([
+                        html.Span("▣",className="charge-plan-icon"),
+                        html.Span("Töltési terv")
+                    ],className="charge-plan-button"),
+                    html.Div(terv_sorok,className="charge-plan-list")
+                ],className="charge-plan")
+            ],className="charge-decision-panel")
+        ],className="charge-summary"),
+        html.Div([
+            html.Div([
+                html.Div("MAI DAM ÁRAK",className="charge-chart-title"),
+                html.Div("€/MWh",className="charge-unit")
+            ],className="charge-chart-header"),
+            dcc.Graph(figure=fig,config={"displayModeBar":False},
+                className="charge-chart-graph"),
+            html.Div([
+                html.Div("< –10 €",className="price-band price-band-deep-negative"),
+                html.Div("–10 – 0 €",className="price-band price-band-negative"),
+                html.Div("0 – 50 €",className="price-band price-band-low"),
+                html.Div("50 – 100 €",className="price-band price-band-medium"),
+                html.Div("> 100 €",className="price-band price-band-high")
+            ],className="charge-price-scale"),
+            html.Div("A kiemelt sáv a mai ajánlott töltési időszak.",
+                className="charge-caption")
+        ],className="charge-chart")
+    ],className="charge-hero-card")
 
 def elemzes(dam_target,edf,data,target_atlag,nap_cimke):
     orak=[f"{h:02d}:00" for h in range(24)]
