@@ -131,6 +131,295 @@ body {
   color: #f1f5f9 !important;
 }
 
+.charge-hero-card {
+  width: 100%;
+  min-height: 650px;
+  padding: 24px 28px 18px;
+  overflow: hidden;
+  background: #0a1628;
+  border: 1px solid #1a2d42;
+  border-radius: 8px;
+}
+
+.charge-eyebrow {
+  margin-bottom: 8px;
+  color: #cbd5e1;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.charge-summary {
+  min-height: 285px;
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) 300px;
+  align-items: center;
+  gap: 48px;
+  padding: 0 28px 18px;
+}
+
+.charge-car-showcase {
+  min-width: 0;
+  min-height: 250px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.charge-car {
+  width: min(100%, 440px);
+  height: auto;
+  aspect-ratio: 145 / 88;
+  object-fit: cover;
+  border-radius: 8px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
+}
+
+.charge-car-label {
+  margin-top: 10px;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.charge-decision-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+.charge-gauge {
+  position: relative;
+  width: 220px;
+  height: 220px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: conic-gradient(from 210deg, currentColor 0deg 300deg, #1a2d42 300deg 360deg);
+  color: #ef4444;
+  text-align: center;
+}
+
+.charge-gauge::before {
+  content: "";
+  position: absolute;
+  inset: 11px;
+  border-radius: 50%;
+  background: #081526;
+  box-shadow: inset 0 0 0 1px rgba(100, 116, 139, 0.12);
+}
+
+.charge-gauge > * {
+  position: absolute;
+  z-index: 1;
+}
+
+.charge-gauge.is-ready {
+  color: #10b981;
+  box-shadow: 0 0 26px rgba(16, 185, 129, 0.13);
+}
+
+.charge-gauge.is-waiting {
+  color: #ef4444;
+  box-shadow: 0 0 26px rgba(239, 68, 68, 0.11);
+}
+
+.charge-decision {
+  top: 48px;
+  color: currentColor;
+  font-size: 30px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.charge-decision-helper {
+  top: 82px;
+  color: #94a3b8;
+  font-size: 10px;
+}
+
+.charge-countdown {
+  top: 99px;
+  color: #f1f5f9;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.charge-next-label {
+  top: 128px;
+  color: #64748b;
+  font-size: 9px;
+}
+
+.charge-next-period {
+  top: 145px;
+  color: #10b981;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.charge-next-price {
+  top: 169px;
+  color: #38a5ff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.charge-plan {
+  width: 230px;
+}
+
+.charge-plan summary {
+  list-style: none;
+}
+
+.charge-plan summary::-webkit-details-marker {
+  display: none;
+}
+
+.charge-plan-button {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  cursor: pointer;
+  border: 1px solid #0b8f69;
+  border-radius: 6px;
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.05);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.charge-plan-button:hover {
+  background: rgba(16, 185, 129, 0.10);
+}
+
+.charge-plan-icon {
+  font-size: 15px;
+}
+
+.charge-plan-list {
+  margin-top: 7px;
+  overflow: hidden;
+  border: 1px solid #1a2d42;
+  border-radius: 6px;
+  background: #081526;
+}
+
+.charge-plan-row {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 10px;
+  border-bottom: 1px solid #1a2d42;
+}
+
+.charge-plan-row:last-child {
+  border-bottom: 0;
+}
+
+.charge-plan-time,
+.charge-plan-price {
+  font-size: 10px;
+}
+
+.charge-plan-time {
+  color: #cbd5e1;
+  font-weight: 700;
+}
+
+.charge-plan-price {
+  color: #10b981;
+}
+
+.charge-chart {
+  min-height: 365px;
+  padding-top: 18px;
+  border-top: 1px solid #1a2d42;
+}
+
+.charge-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 12px;
+}
+
+.charge-chart-title {
+  color: #f1f5f9;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.charge-unit {
+  padding: 5px 10px;
+  border: 1px solid #1a2d42;
+  border-radius: 14px;
+  color: #cbd5e1;
+  background: #0f1d31;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.charge-chart-graph {
+  height: 270px;
+}
+
+.charge-price-scale {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin: -2px 12px 0;
+  overflow: hidden;
+  border-radius: 5px;
+}
+
+.price-band {
+  min-height: 25px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #f8fafc;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.price-band-deep-negative {
+  background: #006f62;
+}
+
+.price-band-negative {
+  background: #0b9c77;
+}
+
+.price-band-low {
+  background: #6f8f18;
+}
+
+.price-band-medium {
+  background: #b4670d;
+}
+
+.price-band-high {
+  background: #991b1b;
+}
+
+.charge-caption {
+  margin-top: 8px;
+  color: #64748b;
+  font-size: 9px;
+  text-align: center;
+}
+
 @media (max-width: 760px) {
   .app-header-inner,
   .app-main {
@@ -161,5 +450,51 @@ body {
     min-height: 44px;
     padding: 10px 6px;
     font-size: 11px;
+  }
+
+  .charge-hero-card {
+    min-height: 0;
+    padding: 22px 16px 14px;
+  }
+
+  .charge-summary {
+    min-height: 0;
+    grid-template-columns: 1fr;
+    gap: 22px;
+    padding: 10px 0 22px;
+  }
+
+  .charge-car-showcase {
+    min-height: 0;
+  }
+
+  .charge-car {
+    width: min(100%, 320px);
+  }
+
+  .charge-gauge {
+    width: 210px;
+    height: 210px;
+  }
+
+  .charge-chart {
+    min-height: 360px;
+    padding-top: 16px;
+  }
+
+  .charge-chart-header {
+    padding: 0;
+  }
+
+  .charge-price-scale {
+    margin-right: 0;
+    margin-left: 0;
+  }
+
+  .price-band {
+    min-height: 31px;
+    padding: 4px 2px;
+    font-size: 8px;
+    text-align: center;
   }
 }
