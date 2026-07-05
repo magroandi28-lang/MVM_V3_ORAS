@@ -821,32 +821,40 @@ def fooldal(data):
 
     def ar_szin(ar):
         if ar < -10:
-            return "#00c98d"
+            return "#00d6a0"
         if ar < 0:
-            return "#28d7b0"
+            return "#00e0c2"
         if ar < 50:
-            return "#c7df20"
+            return "#e6df00"
         if ar < 100:
-            return "#ff9f1c"
-        return "#ef4444"
+            return "#ff9800"
+        return "#ff3b30"
 
     fig = go.Figure()
     pozitiv_y = [max(a,0) for a in arak]
     neg_y = [min(a,0) for a in arak]
     if any(a > 0 for a in arak):
         fig.add_trace(go.Scatter(x=idok,y=pozitiv_y,mode="lines",
-            line=dict(width=0),fill="tozeroy",fillcolor="rgba(255,102,0,0.10)",
+            line=dict(width=0),fill="tozeroy",
+            fillgradient=dict(type="vertical",colorscale=[
+                [0,"rgba(255,152,0,0.01)"],
+                [0.55,"rgba(255,102,0,0.08)"],
+                [1,"rgba(255,59,48,0.24)"]
+            ]),
             hoverinfo="skip"))
     if any(a < 0 for a in arak):
         fig.add_trace(go.Scatter(x=idok,y=neg_y,mode="lines",
-            line=dict(width=0),fill="tozeroy",fillcolor="rgba(16,185,129,0.16)",
+            line=dict(width=0),fill="tozeroy",
+            fillgradient=dict(type="vertical",colorscale=[
+                [0,"rgba(0,224,194,0.28)"],
+                [1,"rgba(0,224,194,0.02)"]
+            ]),
             hoverinfo="skip"))
 
     for i in range(len(idok)-1):
         fig.add_trace(go.Scatter(
             x=[idok[i],idok[i+1]],y=[arak[i],arak[i+1]],mode="lines",
-            line=dict(color=ar_szin((arak[i]+arak[i+1])/2),width=2.5),
-            opacity=0.42 if idok[i] < most else 1,
+            line=dict(color=ar_szin((arak[i]+arak[i+1])/2),width=3),
             hoverinfo="skip",showlegend=False))
 
     fig.add_trace(go.Scatter(x=idok,y=arak,mode="markers",
@@ -866,15 +874,17 @@ def fooldal(data):
         showarrow=True,arrowhead=0,ax=34,ay=-42,
         bgcolor="#0f1d31",bordercolor=C['brd'],borderwidth=1,borderpad=7,
         font=dict(color=C['wh'],size=10))
+    y_min = min(-100.0, float(50*np.floor(min(arak)/50)))
+    y_max = max(150.0, float(50*np.ceil(max(arak)/50)))
     fig.update_layout(paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)',
         font=dict(color=C['mut'],family='Inter,sans-serif',size=10),
-        margin=dict(l=48,r=20,t=36,b=30),height=270,showlegend=False,
+        margin=dict(l=48,r=20,t=18,b=30),height=270,showlegend=False,
         hovermode="closest",
         xaxis=dict(type="date",showgrid=False,color=C['mut'],
             tickformat="%H:%M",dtick=4*60*60*1000,fixedrange=True,
             range=[idok[0],idok[0]+timedelta(days=1)]),
         yaxis=dict(gridcolor=C['brd'],color=C['mut'],ticksuffix=" €",
-            zeroline=False,fixedrange=True))
+            zeroline=False,fixedrange=True,range=[y_min,y_max]))
 
     return html.Div([
         html.Div("MIKOR TÖLTS MA?",className="charge-eyebrow"),
@@ -882,8 +892,9 @@ def fooldal(data):
             html.Div([
                 html.Img(src="/assets/tesla-charge.png",
                     alt="Elektromos autó",className="charge-car"),
-                html.Div("Mai töltési állapot",className="charge-car-label")
-            ],className="charge-car-showcase"),
+                html.Div("TÖLTÉS AJÁNLOTT" if toltheto else "VÁRAKOZÁS",
+                    className="charge-car-label")
+            ],className=f"charge-car-showcase {'is-ready' if toltheto else 'is-waiting'}"),
             html.Div([
                 html.Div([
                     html.Div(dontes,className="charge-decision"),
@@ -907,6 +918,16 @@ def fooldal(data):
                 html.Div("MAI DAM ÁRAK",className="charge-chart-title"),
                 html.Div("€/MWh",className="charge-unit")
             ],className="charge-chart-header"),
+            html.Div([
+                html.Div([
+                    html.Span(className="charge-legend-line"),
+                    html.Span("Mai ár")
+                ],className="charge-legend-item"),
+                html.Div([
+                    html.Span(className="charge-legend-dot"),
+                    html.Span("Jelenlegi")
+                ],className="charge-legend-item")
+            ],className="charge-chart-legend"),
             dcc.Graph(figure=fig,config={"displayModeBar":False},
                 className="charge-chart-graph"),
             html.Div([

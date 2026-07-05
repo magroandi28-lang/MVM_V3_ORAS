@@ -159,15 +159,50 @@ body {
 }
 
 .charge-car-showcase {
+  position: relative;
   min-width: 0;
   min-height: 250px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  color: #ef4444;
+  isolation: isolate;
+}
+
+.charge-car-showcase::before {
+  content: "";
+  position: absolute;
+  z-index: 2;
+  top: 45%;
+  left: 50%;
+  width: min(88%, 470px);
+  height: 220px;
+  pointer-events: none;
+  border-radius: 50%;
+  background: conic-gradient(from 210deg, currentColor 0deg 300deg, transparent 300deg 360deg);
+  opacity: 0.72;
+  transform: translate(-50%, -50%);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 0);
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 0);
+  filter: drop-shadow(0 0 8px currentColor);
+}
+
+.charge-car-showcase.is-ready {
+  color: #10b981;
+}
+
+.charge-car-showcase.is-ready::before {
+  animation: charge-status-pulse 2.4s ease-in-out infinite;
+}
+
+.charge-car-showcase.is-waiting {
+  color: #ef4444;
 }
 
 .charge-car {
+  position: relative;
+  z-index: 1;
   width: min(100%, 440px);
   height: auto;
   aspect-ratio: 145 / 88;
@@ -176,13 +211,42 @@ body {
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
 }
 
+.charge-car-showcase.is-ready .charge-car {
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28), 0 0 28px rgba(16, 185, 129, 0.20);
+}
+
+.charge-car-showcase.is-waiting .charge-car {
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28), 0 0 22px rgba(239, 68, 68, 0.13);
+}
+
 .charge-car-label {
+  position: relative;
+  z-index: 3;
   margin-top: 10px;
-  color: #64748b;
+  color: currentColor;
   font-size: 10px;
-  font-weight: 600;
+  font-weight: 800;
   letter-spacing: 0;
   text-transform: uppercase;
+}
+
+@keyframes charge-status-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: translate(-50%, -50%) scale(0.985);
+  }
+
+  50% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.015);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .charge-car-showcase.is-ready::before {
+    animation: none;
+  }
 }
 
 .charge-decision-panel {
@@ -343,8 +407,11 @@ body {
 
 .charge-chart {
   min-height: 365px;
-  padding-top: 18px;
-  border-top: 1px solid #1a2d42;
+  margin-top: 8px;
+  padding: 18px 14px 14px;
+  border: 1px solid #17324d;
+  border-radius: 8px;
+  background: #071529;
 }
 
 .charge-chart-header {
@@ -369,6 +436,37 @@ body {
   background: #0f1d31;
   font-size: 9px;
   font-weight: 700;
+}
+
+.charge-chart-legend {
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 5px 12px 0;
+}
+
+.charge-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #94a3b8;
+  font-size: 9px;
+}
+
+.charge-legend-line {
+  width: 18px;
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #00e0c2, #e6df00, #ff9800, #ff3b30);
+}
+
+.charge-legend-dot {
+  width: 7px;
+  height: 7px;
+  border: 1px solid #f1f5f9;
+  border-radius: 50%;
+  background: #0f1d31;
 }
 
 .charge-chart-graph {
@@ -468,6 +566,11 @@ body {
     min-height: 0;
   }
 
+  .charge-car-showcase::before {
+    width: min(94%, 330px);
+    height: 155px;
+  }
+
   .charge-car {
     width: min(100%, 320px);
   }
@@ -479,7 +582,7 @@ body {
 
   .charge-chart {
     min-height: 360px;
-    padding-top: 16px;
+    padding: 16px 8px 12px;
   }
 
   .charge-chart-header {
