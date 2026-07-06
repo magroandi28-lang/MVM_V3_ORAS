@@ -910,7 +910,7 @@ def fooldal(data,aj):
         y_max = y_min + 10.0
     fig.update_layout(paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)',
         font=dict(color=C['mut'],family='Inter,sans-serif',size=10),
-        margin=dict(l=48,r=18,t=12,b=30),height=230,showlegend=False,
+        margin=dict(l=48,r=18,t=12,b=30),height=300,showlegend=False,
         hovermode="closest",barmode="overlay",bargap=0.18,
         xaxis=dict(type="date",showgrid=False,color=C['mut'],
             tickformat="%H:%M",dtick=3*60*60*1000,fixedrange=True,
@@ -957,7 +957,7 @@ def fooldal(data,aj):
                 html.Div("MAI DAM ÁRAK",className="charge-chart-title"),
                 html.Div("€/MWh",className="charge-unit")
             ],className="charge-chart-header"),
-            dcc.Graph(figure=fig,config={"displayModeBar":False,"responsive":True},
+            dcc.Graph(figure=fig,config={"displayModeBar":False},
                 className="charge-chart-graph"),
             html.Div([
                 html.Div("< –10 €",className="price-band price-band-deep-negative"),
