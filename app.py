@@ -579,6 +579,7 @@ app.layout = html.Div([
             html.Div(id="modell-panel")
         ],style={"display":"none"}),
         dcc.Interval(id="refresh",interval=1800*1000,n_intervals=0),
+        dcc.Interval(id="clock",interval=60*1000,n_intervals=0),
         dcc.Store(id="oldal",data="fooldal"),
         dcc.Store(id="adatok",data=None),
     ],className="app-main")
@@ -587,6 +588,12 @@ app.layout = html.Div([
 @callback(Output("adatok","data"),
     [Input("refresh","n_intervals"),Input("manual-refresh","n_clicks")])
 def fetch(n,_manual):
+    ctx = dash.callback_context
+    if ctx.triggered:
+        trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
+        if trigger_id == "manual-refresh":
+            CACHE.clear()
+
     if bundle is None:
         return {"kritikus_hiba":True,"hianyzo":[],"modell_hiba":MODELL_HIBA}
 
@@ -642,7 +649,7 @@ def fetch(n,_manual):
         "eur_huf":eur_huf if eur_ok else None,
         "dam_target":dam["target"],"dam_ma":dam["ma"],
         "dam_target_nap":dam["target_nap"],
-        "ajanlas":toltes_ajanlas(dam["ma_negyed"]),
+        "ma_negyed":dam["ma_negyed"],
         "ido_forras":ido_forras if ido_ok else None,
         "aho":aho if ho_ok else None,
         "mert_fogyasztas":mert,
@@ -668,8 +675,8 @@ NB = {"display":"flex","alignItems":"center","justifyContent":"center",
     Output("oldal-content","children"),Output("src-panel","children"),
     Output("modell-panel","children"),
     Output("nav-fooldal","style"),Output("nav-elemzes","style"),Output("nav-mllabor","style")],
-    [Input("adatok","data"),Input("oldal","data")])
-def render(data,oldal):
+    [Input("adatok","data"),Input("oldal","data"),Input("clock","n_intervals")])
+def render(data,oldal,_clock):
     ns=[{**NB,"color":C['gr'],"borderBottom":f"2px solid {C['gr']}"} if oldal==x
         else {**NB,"color":C['mut'],"borderBottom":"2px solid transparent"}
         for x in ["fooldal","elemzes","mllabor"]]
@@ -708,7 +715,8 @@ def render(data,oldal):
 
     ora=datetime.now().hour
     ma_atlag = float(np.mean(dam_ma))
-    aj = data.get("ajanlas")
+    ma_negyed = data.get("ma_negyed")
+    aj = toltes_ajanlas(ma_negyed) if ma_negyed else None
     dam_most = float(aj["akt_ar"]) if aj and aj.get("akt_ar") is not None else (
         dam_ma[ora] if ora < len(dam_ma) else ma_atlag)
     dam_sz = dam_szin(dam_most, ma_atlag)
@@ -753,7 +761,7 @@ def render(data,oldal):
     ],className="kpi-grid")
 
     if oldal=="fooldal":
-        page=fooldal(data)
+        page=fooldal(data,aj)
     elif oldal=="elemzes":
         page=elemzes(dam_target,edf,data,float(np.mean(dam_target)),nap_cimke)
     else:
@@ -763,8 +771,7 @@ def render(data,oldal):
 # ============================================================
 # FŐOLDAL — egyetlen hero-kártya: "Mikor tölts ma?"
 # ============================================================
-def fooldal(data):
-    aj = data.get("ajanlas")
+def fooldal(data,aj):
     if not aj:
         return hianyzo_panel("MIKOR TÖLTS MA?",
             "A mai napból nincs hátra értékelhető időszak — éjfél után frissül.")
@@ -871,11 +878,17 @@ def fooldal(data):
         showarrow=True,arrowhead=0,ax=34,ay=-42,
         bgcolor="#0f1d31",bordercolor=C['brd'],borderwidth=1,borderpad=7,
         font=dict(color=C['wh'],size=10))
-    y_min = min(-100.0, float(50*np.floor(min(arak)/50)))
-    y_max = max(150.0, float(50*np.ceil(max(arak)/50)))
+    ar_min = min(arak)
+    ar_max = max(arak)
+    ar_tartomany = max(ar_max - ar_min, 1.0)
+    y_padding = max(5.0, ar_tartomany * 0.08)
+    y_min = min(0.0, ar_min - y_padding) if ar_min < 0 else 0.0
+    y_max = max(0.0, ar_max + y_padding)
+    if y_max <= y_min:
+        y_max = y_min + 10.0
     fig.update_layout(paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)',
         font=dict(color=C['mut'],family='Inter,sans-serif',size=10),
-        margin=dict(l=48,r=18,t=12,b=30),height=340,showlegend=False,
+        margin=dict(l=48,r=18,t=12,b=30),height=300,showlegend=False,
         hovermode="closest",barmode="overlay",bargap=0.18,
         xaxis=dict(type="date",showgrid=False,color=C['mut'],
             tickformat="%H:%M",dtick=3*60*60*1000,fixedrange=True,
