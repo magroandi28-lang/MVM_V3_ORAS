@@ -740,7 +740,7 @@ body {
   min-height: 310px;
   display: block;
   overflow: hidden;
-  background: #040b19;
+  background: #071529;
   isolation: isolate;
 }
 
@@ -807,17 +807,17 @@ body {
   background:
     linear-gradient(
       to right,
-      #040b19 0%,
+      #071529 0%,
       transparent 5%,
       transparent 95%,
-      #040b19 100%
+      #071529 100%
     ),
     linear-gradient(
       to bottom,
       transparent 0%,
       transparent 64%,
-      rgba(4, 11, 25, 0.38) 73%,
-      #040b19 96%
+      rgba(7, 21, 41, 0.38) 73%,
+      #071529 96%
     );
 }
 
@@ -835,10 +835,10 @@ body {
 .charge-floor-glow {
   position: absolute;
   z-index: 2;
-  right: 29%;
+  right: 21%;
   bottom: 45px;
-  left: 29%;
-  height: 48px;
+  left: 21%;
+  height: 58px;
   pointer-events: none;
   border-radius: 50%;
 }
@@ -1198,52 +1198,37 @@ body {
   }
 }
 
-/* FINOMHANGOLAS */
-:root {
-  --charge-summary-height: 300px;
-  --charge-chart-height: 300px;
+/* ==== FINOMHANGOLÁS — 100% zoomon átlátható főoldal ==== */
+
+.app-header-inner,
+.app-main {
+  width: min(1280px, calc(100% - 40px));
 }
 
-.charge-summary {
-  min-height: var(--charge-summary-height);
-}
+.app-main { padding-top: 16px; }
 
+.kpi-card { min-height: 76px; padding: 10px 14px; }
+.kpi-value { font-size: 17px; }
+.kpi-strip { margin-bottom: 10px; }
+
+.nav-tabs-row { min-height: 40px; margin-bottom: 10px; }
+.nav-tab { min-height: 40px; padding: 8px 10px; }
+
+.charge-summary { min-height: 250px; }
 .charge-car-showcase,
-.charge-decision-panel {
-  min-height: var(--charge-summary-height);
-}
+.charge-decision-panel { min-height: 250px; }
 
-.charge-gauge {
-  width: 214px;
-  height: 214px;
-}
+.charge-eyebrow { padding: 12px 16px; font-size: 11px; }
+.charge-car-frame { inset: 34px 0 0; }
 
-.charge-chart-graph {
-  height: var(--charge-chart-height);
-}
+.charge-gauge { width: 170px; height: 170px; }
+.charge-gauge > .charge-gauge-face { inset: 24px; }
+.charge-decision { font-size: 21px; }
+.charge-decision-helper { font-size: 13px; margin-top: 6px; }
+.charge-countdown { font-size: 13px; margin-top: 8px; }
+.charge-next { margin-top: 4px; }
+.charge-plan { margin-top: 6px; }
 
-@media (max-width: 980px) {
-  .charge-gauge {
-    width: 208px;
-    height: 208px;
-  }
-}
-
-@media (max-width: 700px) {
-  .charge-summary {
-    min-height: 0;
-  }
-
-  .charge-car-showcase {
-    min-height: 250px;
-  }
-
-  .charge-decision-panel {
-    min-height: 300px;
-  }
-
-  .charge-gauge {
-    width: 210px;
-    height: 210px;
-  }
-}
+.charge-chart { margin-top: 8px; padding: 10px 14px 10px; }
+.charge-chart-graph { height: 200px; }
+.price-band { min-height: 18px; font-size: 8px; }
