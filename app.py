@@ -498,11 +498,11 @@ def kpi(cim,val,sub,szin,trend=None):
                 xaxis=dict(visible=False),yaxis=dict(visible=False),showlegend=False))
         ch = [dcc.Graph(figure=fig,config={"displayModeBar":False},style={"height":"24px","marginTop":"4px"})]
     return html.Div([
-        html.Div(cim,style={"fontSize":"10px","color":C['mut'],"textTransform":"uppercase","letterSpacing":".8px","marginBottom":"2px"}),
-        html.Div(val,style={"fontSize":"20px","fontWeight":"600","color":C['wh']}),
-        html.Div(sub,style={"fontSize":"11px","color":szin,"marginTop":"1px","fontWeight":"500"}),
+        html.Div(cim,className="kpi-label"),
+        html.Div(val,className="kpi-value"),
+        html.Div(sub,className="kpi-sub",style={"color":szin}),
         *ch
-    ],style={"background":C['card'],"border":f"1px solid {C['brd']}","borderRadius":"12px","padding":"14px 16px","flex":"1"})
+    ],className="kpi-card")
 
 def src_sor(nev,ok):
     return html.Div([
@@ -550,7 +550,8 @@ HEADER = html.Header([
         ],className="brand-lockup"),
         html.Div([
             html.Span("ÉLŐ ADAT",className="live-badge"),
-            html.Div(id="statusz",className="header-status")
+            html.Div(id="statusz",className="header-status"),
+            html.Button("Frissítés",id="manual-refresh",n_clicks=0,className="refresh-button")
         ],className="header-meta")
     ],className="app-header-inner")
 ],className="app-header")
@@ -583,8 +584,9 @@ app.layout = html.Div([
     ],className="app-main")
 ],className="app-shell")
 
-@callback(Output("adatok","data"),Input("refresh","n_intervals"))
-def fetch(n):
+@callback(Output("adatok","data"),
+    [Input("refresh","n_intervals"),Input("manual-refresh","n_clicks")])
+def fetch(n,_manual):
     if bundle is None:
         return {"kritikus_hiba":True,"hianyzo":[],"modell_hiba":MODELL_HIBA}
 
@@ -706,10 +708,11 @@ def render(data,oldal):
 
     ora=datetime.now().hour
     ma_atlag = float(np.mean(dam_ma))
-    dam_most = dam_ma[ora] if ora < len(dam_ma) else ma_atlag
+    aj = data.get("ajanlas")
+    dam_most = float(aj["akt_ar"]) if aj and aj.get("akt_ar") is not None else (
+        dam_ma[ora] if ora < len(dam_ma) else ma_atlag)
     dam_sz = dam_szin(dam_most, ma_atlag)
 
-    aj = data.get("ajanlas")
     legolcs_txt = "–"
     if aj:
         fk = datetime.fromisoformat(aj["fo_kezd"])
@@ -747,7 +750,7 @@ def render(data,oldal):
         kpi("Legolcsóbb ma",legolcs_txt,"Hátralévő órákból",C['gr']),
         kpi("Adatminőség-őr",f"{stl_db} / {stl_tot}" if data["stl"] else "–",
             "Anomália, elmúlt 30 nap mérés",C['or'] if stl_db > 0 else C['gr']),
-    ],style={"display":"flex","gap":"12px"})
+    ],className="kpi-grid")
 
     if oldal=="fooldal":
         page=fooldal(data)
@@ -813,57 +816,51 @@ def fooldal(data):
         for kezd,veg,ar in terv[:3]
     ]
 
-    # --- Mai árgörbe: a múlt visszafogott, a hátralévő idő hangsúlyos ---
+    # --- Mai DAM oszlopdiagram: a negatív árak a nullavonal alá futnak ---
     g = aj["grafikon"]
     idok = [datetime.fromisoformat(t) for t in g["ido"]]
-    arak = g["ar"]
+    arak = [float(a) for a in g["ar"]]
     most_i = int(np.argmin([abs((t-most).total_seconds()) for t in idok]))
+    arak[most_i] = float(aj["akt_ar"])
 
     def ar_szin(ar):
         if ar < -10:
-            return "#00d6a0"
+            return "#00bfae"
         if ar < 0:
             return "#00e0c2"
         if ar < 50:
-            return "#e6df00"
+            return "#c9df16"
         if ar < 100:
             return "#ff9800"
         return "#ff3b30"
 
     fig = go.Figure()
-    pozitiv_y = [max(a,0) for a in arak]
-    neg_y = [min(a,0) for a in arak]
-    if any(a > 0 for a in arak):
-        fig.add_trace(go.Scatter(x=idok,y=pozitiv_y,mode="lines",
-            line=dict(width=0),fill="tozeroy",
-            fillgradient=dict(type="vertical",colorscale=[
-                [0,"rgba(255,152,0,0.01)"],
-                [0.55,"rgba(255,102,0,0.08)"],
-                [1,"rgba(255,59,48,0.24)"]
-            ]),
-            hoverinfo="skip"))
-    if any(a < 0 for a in arak):
-        fig.add_trace(go.Scatter(x=idok,y=neg_y,mode="lines",
-            line=dict(width=0),fill="tozeroy",
-            fillgradient=dict(type="vertical",colorscale=[
-                [0,"rgba(0,224,194,0.28)"],
-                [1,"rgba(0,224,194,0.02)"]
-            ]),
-            hoverinfo="skip"))
+    slot_ms = (abs((idok[1]-idok[0]).total_seconds())*1000
+               if len(idok)>1 else 60*60*1000)
+    bar_width = slot_ms * 0.66
+    glow_width = slot_ms * 0.94
+    pozitiv_y = [max(a,0.0) for a in arak]
+    negativ_y = [min(a,0.0) for a in arak]
 
-    for i in range(len(idok)-1):
-        fig.add_trace(go.Scatter(
-            x=[idok[i],idok[i+1]],y=[arak[i],arak[i+1]],mode="lines",
-            line=dict(color=ar_szin((arak[i]+arak[i+1])/2),width=3),
+    if any(a < 0 for a in arak):
+        fig.add_trace(go.Bar(x=idok,y=negativ_y,width=glow_width,
+            marker=dict(color="rgba(0,224,194,0.16)",line=dict(width=0)),
             hoverinfo="skip",showlegend=False))
+    fig.add_trace(go.Bar(x=idok,y=[a if a<0 else 0 for a in arak],width=bar_width,
+        marker=dict(color=[ar_szin(a) for a in arak],line=dict(width=0)),
+        customdata=arak,
+        hovertemplate="%{x|%H:%M}<br>%{customdata:.0f} €/MWh<extra></extra>",
+        showlegend=False))
+    fig.add_trace(go.Bar(x=idok,y=pozitiv_y,width=bar_width,
+        marker=dict(color=[ar_szin(a) for a in arak],line=dict(width=0)),
+        customdata=arak,
+        hovertemplate="%{x|%H:%M}<br>%{customdata:.0f} €/MWh<extra></extra>",
+        showlegend=False))
 
     fig.add_trace(go.Scatter(x=idok,y=arak,mode="markers",
-        marker=dict(size=8,color="rgba(0,0,0,0)"),
+        marker=dict(size=12,color="rgba(0,0,0,0)"),
         hovertemplate="%{x|%H:%M}<br>%{y:.0f} €/MWh<extra></extra>"))
     fig.add_hline(y=0,line=dict(color=C['mut'],width=1))
-    fig.add_vrect(x0=ajanlott_kezd,x1=ajanlott_veg,
-        fillcolor="rgba(16,185,129,0.12)" if toltheto else "rgba(255,102,0,0.10)",
-        line_width=0)
     fig.add_shape(type="line",x0=most,x1=most,y0=0,y1=1,yref="paper",
         line=dict(color=C['wh'],width=1,dash="dot"))
     fig.add_trace(go.Scatter(x=[idok[most_i]],y=[arak[most_i]],mode="markers",
@@ -878,56 +875,53 @@ def fooldal(data):
     y_max = max(150.0, float(50*np.ceil(max(arak)/50)))
     fig.update_layout(paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)',
         font=dict(color=C['mut'],family='Inter,sans-serif',size=10),
-        margin=dict(l=48,r=20,t=18,b=30),height=270,showlegend=False,
-        hovermode="closest",
+        margin=dict(l=48,r=18,t=12,b=30),height=340,showlegend=False,
+        hovermode="closest",barmode="overlay",bargap=0.18,
         xaxis=dict(type="date",showgrid=False,color=C['mut'],
-            tickformat="%H:%M",dtick=4*60*60*1000,fixedrange=True,
+            tickformat="%H:%M",dtick=3*60*60*1000,fixedrange=True,
             range=[idok[0],idok[0]+timedelta(days=1)]),
-        yaxis=dict(gridcolor=C['brd'],color=C['mut'],ticksuffix=" €",
+        yaxis=dict(gridcolor=C['brd'],color=C['mut'],
             zeroline=False,fixedrange=True,range=[y_min,y_max]))
 
+    state_class = "is-negative" if float(aj["akt_ar"]) < 0 else (
+        "is-ready" if toltheto else "is-waiting")
+    egy_soros_idoszak = f"{idoszak} · {dontes_ar:.0f} €/MWh"
+
     return html.Div([
-        html.Div("MIKOR TÖLTS MA?",className="charge-eyebrow"),
         html.Div([
             html.Div([
-                html.Img(src="/assets/tesla-charge.png",
-                    alt="Elektromos autó",className="charge-car"),
-                html.Div("TÖLTÉS AJÁNLOTT" if toltheto else "VÁRAKOZÁS",
-                    className="charge-car-label")
-            ],className=f"charge-car-showcase {'is-ready' if toltheto else 'is-waiting'}"),
+                html.Div("MIKOR TÖLTS MA?",className="charge-eyebrow"),
+                html.Div([
+                    html.Div([
+                        html.Img(src="/assets/sports-coupe-board.png",
+                            alt="Elektromos sportautó",className="charge-car-source")
+                    ],className="charge-car-crop"),
+                    html.Div(className="charge-floor-glow")
+                ],className="charge-car-frame")
+            ],className=f"charge-car-showcase {state_class}"),
             html.Div([
                 html.Div([
-                    html.Div(dontes,className="charge-decision"),
-                    html.Div(dontes_seged,className="charge-decision-helper"),
-                    html.Div(dontes_ido,className="charge-countdown"),
+                    html.Div([
+                        html.Div(dontes,className="charge-decision"),
+                        html.Div(dontes_seged,className="charge-decision-helper"),
+                        html.Div(dontes_ido,className="charge-countdown")
+                    ],className="charge-gauge-face")
+                ],className=f"charge-gauge {state_class}"),
+                html.Div([
                     html.Div(idoszak_cimke,className="charge-next-label"),
-                    html.Div(idoszak,className="charge-next-period"),
-                    html.Div(f"{dontes_ar:.0f} €/MWh",className="charge-next-price")
-                ],className=f"charge-gauge {'is-ready' if toltheto else 'is-waiting'}"),
+                    html.Div(egy_soros_idoszak,className="charge-next-period")
+                ],className="charge-next"),
                 html.Details([
-                    html.Summary([
-                        html.Span("▣",className="charge-plan-icon"),
-                        html.Span("Töltési terv")
-                    ],className="charge-plan-button"),
+                    html.Summary("Töltési terv",className="charge-plan-button"),
                     html.Div(terv_sorok,className="charge-plan-list")
                 ],className="charge-plan")
-            ],className="charge-decision-panel")
+            ],className=f"charge-decision-panel {state_class}")
         ],className="charge-summary"),
         html.Div([
             html.Div([
                 html.Div("MAI DAM ÁRAK",className="charge-chart-title"),
                 html.Div("€/MWh",className="charge-unit")
             ],className="charge-chart-header"),
-            html.Div([
-                html.Div([
-                    html.Span(className="charge-legend-line"),
-                    html.Span("Mai ár")
-                ],className="charge-legend-item"),
-                html.Div([
-                    html.Span(className="charge-legend-dot"),
-                    html.Span("Jelenlegi")
-                ],className="charge-legend-item")
-            ],className="charge-chart-legend"),
             dcc.Graph(figure=fig,config={"displayModeBar":False},
                 className="charge-chart-graph"),
             html.Div([
@@ -936,9 +930,7 @@ def fooldal(data):
                 html.Div("0 – 50 €",className="price-band price-band-low"),
                 html.Div("50 – 100 €",className="price-band price-band-medium"),
                 html.Div("> 100 €",className="price-band price-band-high")
-            ],className="charge-price-scale"),
-            html.Div("A kiemelt sáv a mai ajánlott töltési időszak.",
-                className="charge-caption")
+            ],className="charge-price-scale")
         ],className="charge-chart")
     ],className="charge-hero-card")
 
