@@ -1197,3 +1197,53 @@ body {
     text-align: center;
   }
 }
+
+/* FINOMHANGOLAS */
+:root {
+  --charge-summary-height: 300px;
+  --charge-chart-height: 300px;
+}
+
+.charge-summary {
+  min-height: var(--charge-summary-height);
+}
+
+.charge-car-showcase,
+.charge-decision-panel {
+  min-height: var(--charge-summary-height);
+}
+
+.charge-gauge {
+  width: 214px;
+  height: 214px;
+}
+
+.charge-chart-graph {
+  height: var(--charge-chart-height);
+}
+
+@media (max-width: 980px) {
+  .charge-gauge {
+    width: 208px;
+    height: 208px;
+  }
+}
+
+@media (max-width: 700px) {
+  .charge-summary {
+    min-height: 0;
+  }
+
+  .charge-car-showcase {
+    min-height: 250px;
+  }
+
+  .charge-decision-panel {
+    min-height: 300px;
+  }
+
+  .charge-gauge {
+    width: 210px;
+    height: 210px;
+  }
+}
