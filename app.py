@@ -9,8 +9,10 @@ import joblib
 import requests
 import os
 import time
+import math
 from datetime import datetime, timedelta
 from io import StringIO
+from zoneinfo import ZoneInfo
 from statsmodels.tsa.seasonal import STL
 import holidays
 from dotenv import load_dotenv
@@ -26,6 +28,7 @@ server = app.server
 BASE = os.path.dirname(os.path.abspath(__file__))
 ENTSOE_API_KEY = os.environ.get("ENTSOE_API_KEY","")
 VISUAL_CROSSING_KEY = os.environ.get("VISUAL_CROSSING_KEY","")
+BUDAPEST_TZ = ZoneInfo("Europe/Budapest")
 hu_holidays = holidays.Hungary(years=list(range(2015,2028)))
 
 C = {'bg':'#050d1a','sb':'#070f1e','card':'#0a1628','card2':'#0f1923','brd':'#1a2d42',
@@ -65,10 +68,10 @@ def model_predict(X_df):
 # GYORSÍTÓTÁR
 # ============================================================
 CACHE = {}
-def cachelt(kulcs, ttl_sec, fn, ok_index):
+def cachelt(kulcs, ttl_sec, fn, ok_index, force=False):
     most = time.time()
     rec = CACHE.get(kulcs)
-    if rec and (most - rec["ido"]) < ttl_sec:
+    if rec and not force and (most - rec["ido"]) < ttl_sec:
         return rec["ertek"]
     ertek = fn()
     if ertek[ok_index]:
@@ -80,8 +83,12 @@ def cachelt(kulcs, ttl_sec, fn, ok_index):
         return rec["ertek"]
     return ertek
 
+def _helyi_most():
+    """Budapesti falióra, a szerver saját időzónájától függetlenül."""
+    return datetime.now(BUDAPEST_TZ).replace(tzinfo=None)
+
 def _ma():
-    return datetime.now().replace(hour=0,minute=0,second=0,microsecond=0)
+    return _helyi_most().replace(hour=0,minute=0,second=0,microsecond=0)
 
 def _entsoe():
     from entsoe import EntsoePandasClient
@@ -108,8 +115,8 @@ def _naponkent_oras(sorozat):
 def get_eur_huf():
     try:
         r = requests.get("https://data-api.ecb.europa.eu/service/data/EXR/D.HUF.EUR.SP00.A",
-            params={"startPeriod":(datetime.now()-timedelta(days=7)).strftime("%Y-%m-%d"),
-                    "endPeriod":datetime.now().strftime("%Y-%m-%d"),"format":"csvdata"},timeout=10)
+            params={"startPeriod":(_helyi_most()-timedelta(days=7)).strftime("%Y-%m-%d"),
+                    "endPeriod":_helyi_most().strftime("%Y-%m-%d"),"format":"csvdata"},timeout=10)
         df = pd.read_csv(StringIO(r.text))[["TIME_PERIOD","OBS_VALUE"]].dropna()
         df["OBS_VALUE"] = pd.to_numeric(df["OBS_VALUE"],errors="coerce")
         return float(df["OBS_VALUE"].dropna().iloc[-1]),True
@@ -267,7 +274,7 @@ def get_load():
     try:
         c = _entsoe(); ma = _ma()
         s = pd.Timestamp((ma-timedelta(days=17)).strftime("%Y-%m-%d"),tz="Europe/Budapest")
-        e = pd.Timestamp(datetime.now(),tz="Europe/Budapest") + pd.Timedelta(hours=1)
+        e = pd.Timestamp(_helyi_most(),tz="Europe/Budapest") + pd.Timedelta(hours=1)
         load = c.query_load("HU",start=s,end=e)
         if isinstance(load,pd.DataFrame): load = load.iloc[:,0]
         load = load.resample('h').mean().dropna()
@@ -405,7 +412,7 @@ def elorejelez(target_datum, dam, ido_df, load, fcs, eur_huf):
 def toltes_ajanlas(ma_negyed):
     """A mostantól éjfélig tartó árakból: a legolcsóbb 1 órás ablak,
     2 alternatíva, és az állapot (TÖLTS MOST / NEGATÍV / VÁRJ)."""
-    most = datetime.now()
+    most = _helyi_most()
     idok = [datetime.fromisoformat(t) for t in ma_negyed["ido"]]
     arak = ma_negyed["ar"]
     # negyedórás vagy órás a felbontás?
@@ -446,13 +453,22 @@ def toltes_ajanlas(ma_negyed):
         neg_kezd = t_lista[i0]
         neg_veg = t_lista[i1] + timedelta(minutes=lepes_perc)
 
-    # most éppen kedvező? — a fő ablakban vagyunk, vagy negatív az aktuális ár
+    # Most éppen kedvező? A visszaszámlálás mindig az AKTUÁLIS
+    # kedvező/negatív blokk végét mutassa, ne egy későbbi blokkét.
     akt_ar = a_lista[0]
-    most_jo = (fo_kezd <= most < fo_veg) or akt_ar < 0
+    optimalis_most = fo_kezd <= most < fo_veg
+    akt_neg_veg = None
+    if akt_ar < 0:
+        akt_i1 = 0
+        while akt_i1 < len(a_lista)-1 and a_lista[akt_i1+1] < 0:
+            akt_i1 += 1
+        akt_neg_veg = t_lista[akt_i1] + timedelta(minutes=lepes_perc)
+
+    most_jo = optimalis_most or akt_ar < 0
+    akt_veg = akt_neg_veg if akt_ar < 0 else (fo_veg if optimalis_most else None)
     hatra_perc = None
-    if most_jo:
-        veg = neg_veg if (negativ and neg_veg) else fo_veg
-        hatra_perc = max(1, int((veg - most).total_seconds() // 60))
+    if akt_veg:
+        hatra_perc = max(1, math.ceil((akt_veg - most).total_seconds() / 60))
 
     return {"fo_kezd":fo_kezd.isoformat(),"fo_veg":fo_veg.isoformat(),
             "fo_ar":fo_ar,"fo_min":fo_min,
@@ -460,12 +476,14 @@ def toltes_ajanlas(ma_negyed):
             "negativ":negativ,
             "neg_kezd":neg_kezd.isoformat() if neg_kezd else None,
             "neg_veg":neg_veg.isoformat() if neg_veg else None,
-            "most_jo":most_jo,"hatra_perc":hatra_perc,"akt_ar":float(akt_ar),
+            "most_jo":most_jo,"hatra_perc":hatra_perc,
+            "akt_veg":akt_veg.isoformat() if akt_veg else None,
+            "akt_ar":float(akt_ar),
             "grafikon":{"ido":[t.isoformat() for t in idok],"ar":arak}}
 
 def visszaszamlalo(cel):
     """'1 óra 24 perc múlva' formátum."""
-    delta = int((cel - datetime.now()).total_seconds() // 60)
+    delta = math.ceil((cel - _helyi_most()).total_seconds() / 60)
     if delta <= 0: return "most"
     ora, perc = divmod(delta, 60)
     if ora == 0: return f"{perc} perc múlva"
@@ -579,30 +597,31 @@ app.layout = html.Div([
             html.Div(id="modell-panel")
         ],style={"display":"none"}),
         dcc.Interval(id="refresh",interval=1800*1000,n_intervals=0),
-        dcc.Interval(id="clock",interval=60*1000,n_intervals=0),
+        dcc.Interval(id="clock",interval=15*1000,n_intervals=0),
         dcc.Store(id="oldal",data="fooldal"),
         dcc.Store(id="adatok",data=None),
     ],className="app-main")
 ],className="app-shell")
 
 @callback(Output("adatok","data"),
-    [Input("refresh","n_intervals"),Input("manual-refresh","n_clicks")])
+    [Input("refresh","n_intervals"),Input("manual-refresh","n_clicks")],
+    running=[
+        (Output("manual-refresh","disabled"),True,False),
+        (Output("manual-refresh","children"),"Frissítés…","Frissítés"),
+    ])
 def fetch(n,_manual):
-    ctx = dash.callback_context
-    if ctx.triggered:
-        trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
-        if trigger_id == "manual-refresh":
-            CACHE.clear()
+    manual = dash.ctx.triggered_id == "manual-refresh"
 
     if bundle is None:
         return {"kritikus_hiba":True,"hianyzo":[],"modell_hiba":MODELL_HIBA}
 
-    eur_huf,eur_ok = cachelt("ecb", 6*3600, get_eur_huf, 1)
-    ido_df,daily,ido_ok,ido_forras = cachelt("idojaras3", 3600, get_idojaras_barmelyik, 2)
-    dam,dam_ok = cachelt("dam2", 3600, get_dam, 1)
-    load,load_ok = cachelt("load17", 3600, get_load, 1)
-    fcs,fc_ok = cachelt("napszelfc", 3600, get_naposzel_fc, 1)
-    aho,ho_ok = cachelt("homerseklet", 3600, get_ho_barmelyik, 1)
+    eur_huf,eur_ok = cachelt("ecb", 6*3600, get_eur_huf, 1, force=manual)
+    ido_df,daily,ido_ok,ido_forras = cachelt(
+        "idojaras3", 3600, get_idojaras_barmelyik, 2, force=manual)
+    dam,dam_ok = cachelt("dam2", 3600, get_dam, 1, force=manual)
+    load,load_ok = cachelt("load17", 3600, get_load, 1, force=manual)
+    fcs,fc_ok = cachelt("napszelfc", 3600, get_naposzel_fc, 1, force=manual)
+    aho,ho_ok = cachelt("homerseklet", 3600, get_ho_barmelyik, 1, force=manual)
 
     hianyzo = []
     if not dam_ok: hianyzo.append("ENTSO-E (DAM árak)")
@@ -655,7 +674,8 @@ def fetch(n,_manual):
         "mert_fogyasztas":mert,
         "stl":stl_data,
         "daily":daily if ido_ok else None,
-        "frissites":datetime.now().strftime("%H:%M"),
+        "frissites":_helyi_most().strftime("%H:%M:%S"),
+        "frissites_tipus":"kézi" if manual else "automatikus",
         "fb":{"ENTSO-E":not (dam_ok and load_ok and fc_ok),"Időjárás":not ido_ok,"ECB":not eur_ok},
         "hianyzo":hianyzo}
 
@@ -713,7 +733,7 @@ def render(data,oldal,_clock):
     stl_db=data["stl"]["anomalia_db"] if data["stl"] else 0
     stl_tot=len(data["stl"]["trend"]) if data["stl"] else 0
 
-    ora=datetime.now().hour
+    ora=_helyi_most().hour
     ma_atlag = float(np.mean(dam_ma))
     ma_negyed = data.get("ma_negyed")
     aj = toltes_ajanlas(ma_negyed) if ma_negyed else None
@@ -733,13 +753,14 @@ def render(data,oldal,_clock):
     if hianyzo:
         statusz=html.Div([
             html.Span("● ",style={"color":C['yw']}),
-            html.Span(f"Részleges élő adatok — nem elérhető: {', '.join(hianyzo)} — frissítve: {data['frissites']}",
+            html.Span(f"Részleges élő adatok — nem elérhető: {', '.join(hianyzo)} — "
+                f"frissítve: {data['frissites']} (Budapest)",
                 style={"fontSize":"12px","color":C['yw'],"fontWeight":"500"})
         ])
     else:
         statusz=html.Div([
             html.Span("● ",style={"color":C['gr']}),
-            html.Span(f"Élő adatok frissítve: {data['frissites']} — {dam_cimke}{ido_txt}",
+            html.Span(f"Élő adatok frissítve: {data['frissites']} (Budapest) — {dam_cimke}{ido_txt}",
                 style={"fontSize":"12px","color":C['txt'],"fontWeight":"500"})
         ])
 
@@ -776,7 +797,7 @@ def fooldal(data,aj):
         return hianyzo_panel("MIKOR TÖLTS MA?",
             "A mai napból nincs hátra értékelhető időszak — éjfél után frissül.")
 
-    most = datetime.now()
+    most = _helyi_most()
     fo_kezd = datetime.fromisoformat(aj["fo_kezd"])
     fo_veg = datetime.fromisoformat(aj["fo_veg"])
     toltheto = bool(aj["most_jo"])
@@ -791,16 +812,17 @@ def fooldal(data,aj):
         ajanlott_ar = float(aj["fo_ar"])
 
     def hatralevo(cel):
-        perc = max(0, int((cel - most).total_seconds() // 60))
+        perc = max(0, math.ceil((cel - most).total_seconds() / 60))
         ora, perc = divmod(perc, 60)
         return f"{ora} óra {perc} perc" if ora else f"{perc} perc"
 
     if toltheto:
+        aktiv_veg = datetime.fromisoformat(aj["akt_veg"])
         dontes = "IGEN"
         dontes_seged = "Még"
-        dontes_ido = f"{aj['hatra_perc']} perc"
+        dontes_ido = hatralevo(aktiv_veg)
         idoszak_cimke = "Kedvező időszak vége"
-        idoszak = f"{ajanlott_veg:%H:%M}"
+        idoszak = f"{aktiv_veg:%H:%M}"
         dontes_ar = float(aj["akt_ar"])
     else:
         dontes = "NEM"
@@ -888,7 +910,7 @@ def fooldal(data,aj):
         y_max = y_min + 10.0
     fig.update_layout(paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)',
         font=dict(color=C['mut'],family='Inter,sans-serif',size=10),
-        margin=dict(l=48,r=18,t=12,b=30),height=300,showlegend=False,
+        margin=dict(l=48,r=18,t=12,b=30),height=230,showlegend=False,
         hovermode="closest",barmode="overlay",bargap=0.18,
         xaxis=dict(type="date",showgrid=False,color=C['mut'],
             tickformat="%H:%M",dtick=3*60*60*1000,fixedrange=True,
@@ -935,7 +957,7 @@ def fooldal(data,aj):
                 html.Div("MAI DAM ÁRAK",className="charge-chart-title"),
                 html.Div("€/MWh",className="charge-unit")
             ],className="charge-chart-header"),
-            dcc.Graph(figure=fig,config={"displayModeBar":False},
+            dcc.Graph(figure=fig,config={"displayModeBar":False,"responsive":True},
                 className="charge-chart-graph"),
             html.Div([
                 html.Div("< –10 €",className="price-band price-band-deep-negative"),
