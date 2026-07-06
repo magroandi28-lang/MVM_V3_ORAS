@@ -910,7 +910,7 @@ def fooldal(data,aj):
         y_max = y_min + 10.0
     fig.update_layout(paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)',
         font=dict(color=C['mut'],family='Inter,sans-serif',size=10),
-        margin=dict(l=48,r=18,t=12,b=30),height=300,showlegend=False,
+        margin=dict(l=48,r=18,t=12,b=30),height=200,showlegend=False,
         hovermode="closest",barmode="overlay",bargap=0.18,
         xaxis=dict(type="date",showgrid=False,color=C['mut'],
             tickformat="%H:%M",dtick=3*60*60*1000,fixedrange=True,
