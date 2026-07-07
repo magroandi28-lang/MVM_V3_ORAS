@@ -420,8 +420,11 @@ def toltes_ajanlas(ma_negyed):
     ablak = max(1, 60 // lepes_perc)  # 1 órányi lépés
 
     jovo = [(t, a) for t, a in zip(idok, arak) if t + timedelta(minutes=lepes_perc) > most]
-    if len(jovo) < ablak:
+    if not jovo:
         return None
+    # A nap utolsó órájában kevesebb negyedóra marad, mint egy teljes ablak —
+    # ilyenkor a maradékkal számolunk, nem tűnik el a kártya éjfélig.
+    ablak = min(ablak, len(jovo))
     t_lista = [x[0] for x in jovo]; a_lista = [x[1] for x in jovo]
 
     # gördülő 1 órás átlagok
@@ -929,9 +932,11 @@ def fooldal(data,aj):
                 html.Div([
                     html.Div([
                         html.Img(src="/assets/sports-coupe-board.png",
-                            alt="Elektromos sportautó",className="charge-car-source")
-                    ],className="charge-car-crop"),
-                    html.Div(className="charge-floor-glow")
+                            alt="Elektromos sportautó",className="charge-car-source"),
+                        html.Div(className="charge-headlight charge-headlight-bal"),
+                        html.Div(className="charge-headlight charge-headlight-jobb"),
+                        html.Div(className="charge-floor-glow")
+                    ],className="charge-car-stage")
                 ],className="charge-car-frame")
             ],className=f"charge-car-showcase {state_class}"),
             html.Div([
