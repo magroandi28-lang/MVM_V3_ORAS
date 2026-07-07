@@ -1213,16 +1213,16 @@ body {
 .price-band { min-height: 18px; font-size: 8px; }
 
 
-/* ==== DINAMIKUS AUTÓ — státuszszínű fényszórók és padlófény ==== */
+/* ==== DINAMIKUS AUTÓ — átlátszó autó, státuszszínű lámpa- és padlófény ==== */
 
 .charge-car-stage {
   position: absolute;
-  top: 0;
-  bottom: 0;
+  top: 8%;
+  bottom: 10%;
   left: 50%;
   transform: translateX(-50%);
-  aspect-ratio: 579 / 621;
-  max-width: 100%;
+  aspect-ratio: 573 / 250;
+  max-width: 92%;
 }
 
 .charge-car-stage .charge-car-source {
@@ -1231,44 +1231,47 @@ body {
   width: 100%;
   height: 100%;
   object-fit: contain;
+  filter: drop-shadow(0 14px 18px rgba(0, 0, 0, 0.45));
 }
 
 .charge-headlight {
   position: absolute;
   z-index: 3;
-  width: 9%;
-  height: 2.6%;
+  width: 10%;
+  height: 7%;
   pointer-events: none;
   border-radius: 50%;
   background: radial-gradient(
     ellipse at center,
-    rgba(255, 255, 255, 0.95) 0%,
-    rgba(var(--state-rgb), 0.85) 35%,
-    rgba(var(--state-rgb), 0.25) 65%,
-    transparent 80%
+    rgba(255, 255, 255, 0.7) 0%,
+    rgba(var(--state-rgb), 0.95) 16%,
+    rgba(var(--state-rgb), 0.5) 55%,
+    transparent 78%
   );
-  filter: blur(1px);
+  filter: blur(2px);
   mix-blend-mode: screen;
   animation: headlight-pulse 2.6s ease-in-out infinite;
 }
 
 .charge-headlight-bal {
-  left: 39%;
-  top: 42.3%;
+  left: 2.5%;
+  top: 49%;
+  width: 8%;
+  height: 8%;
 }
 
 .charge-headlight-jobb {
-  left: 57%;
-  top: 45.9%;
-  width: 6.5%;
-  height: 2%;
+  left: 34.5%;
+  top: 48.5%;
+  width: 13%;
+  height: 8%;
   animation-delay: 0.2s;
 }
 
 @keyframes headlight-pulse {
   0%,
   100% {
-    opacity: 0.7;
+    opacity: 0.65;
   }
 
   50% {
@@ -1278,11 +1281,11 @@ body {
 
 .charge-floor-glow {
   position: absolute;
-  z-index: 2;
-  right: 14%;
-  bottom: 6.5%;
-  left: 14%;
-  height: 12%;
+  z-index: -1;
+  right: 2%;
+  bottom: -5%;
+  left: -6%;
+  height: 34%;
   pointer-events: none;
   border-radius: 50%;
 }
