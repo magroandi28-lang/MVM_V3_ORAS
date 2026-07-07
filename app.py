@@ -653,6 +653,33 @@ def fetch(n,_manual):
             print(f"[HIBA] Előrejelzés: {e}", flush=True)
             hianyzo.append("Előrejelzés")
 
+    # Célnapi nap/szél termelés-sor a 2. oldal grafikonjához
+    target_fc = None
+    if fc_ok and fcs:
+        td_ = target_datum.date()
+        if fcs["nap"].get(td_) is not None and fcs["szel"].get(td_) is not None:
+            target_fc = {"nap":fcs["nap"][td_],"szel":fcs["szel"][td_]}
+
+    # Óránkénti időjárás-ikonok a célnapra (napsugárzás + csapadék alapján)
+    target_ikonok = None
+    if ido_ok and ido_df is not None:
+        try:
+            sor = ido_df[ido_df["Datum"].dt.date == target_datum.date()].iloc[:24]
+            if len(sor) >= 24:
+                target_ikonok = []
+                for _, r_ in sor.iterrows():
+                    o_ = int(r_["Datum"].hour)
+                    if float(r_["Csapadek_mm"] or 0) > 0.3:
+                        target_ikonok.append("☂")
+                    elif o_ < 6 or o_ >= 21:
+                        target_ikonok.append("☾")
+                    elif float(r_["Napsugarzas_W_m2"] or 0) > 120:
+                        target_ikonok.append("☀")
+                    else:
+                        target_ikonok.append("☁")
+        except Exception as e:
+            print(f"[HIBA] Időjárás-ikonok: {e}", flush=True)
+
     stl_data = None
     if load_ok:
         try:
@@ -691,6 +718,8 @@ def fetch(n,_manual):
         "aho":aho if ho_ok else None,
         "mert_fogyasztas":mert,
         "heti_atlag":heti_atlag,
+        "target_fc":target_fc,
+        "target_ikonok":target_ikonok,
         "stl":stl_data,
         "daily":daily if ido_ok else None,
         "frissites":_helyi_most().strftime("%H:%M:%S"),
@@ -1041,7 +1070,7 @@ def elemzes(dam_target,edf,data,target_atlag,nap_cimke):
             marker=dict(size=9,color=C['wh'],line=dict(width=2,color="#ff3b30")),
             hoverinfo="skip",showlegend=False))
         fig.add_annotation(x=i_max,y=y[i_max],
-            text=f"<b>Csúcs: {i_max}:00 — {y[i_max]:,.0f} MWh</b>".replace(","," "),
+            text=f"<b>Csúcs: {i_max:02d}:00 — {y[i_max]:,.0f} MWh</b>".replace(","," "),
             showarrow=True,arrowhead=0,ax=-64,ay=-36,bgcolor="#0f1d31",
             bordercolor="#ff3b30",borderwidth=1,borderpad=6,
             font=dict(color=C['wh'],size=11))
@@ -1049,7 +1078,7 @@ def elemzes(dam_target,edf,data,target_atlag,nap_cimke):
             marker=dict(size=8,color=C['wh'],line=dict(width=2,color="#4da3ff")),
             hoverinfo="skip",showlegend=False))
         fig.add_annotation(x=i_min,y=y[i_min],
-            text=f"Minimum: {i_min}:00 — {y[i_min]:,.0f} MWh".replace(","," "),
+            text=f"Minimum: {i_min:02d}:00 — {y[i_min]:,.0f} MWh".replace(","," "),
             showarrow=True,arrowhead=0,ax=64,ay=36,bgcolor="#0f1d31",
             bordercolor="#2a3a4c",borderwidth=1,borderpad=5,
             font=dict(color="#94a3b8",size=10))
@@ -1066,10 +1095,12 @@ def elemzes(dam_target,edf,data,target_atlag,nap_cimke):
         if heti and all(v == v for v in heti):
             d = (float(np.mean(y)) / float(np.mean(heti)) - 1) * 100
             irany = "magasabb" if d >= 0 else "alacsonyabb"
-            kontextus = (f"A heti átlagnál ~{abs(d):.0f}%-kal {irany} "
+            kontextus = (f"Az elmúlt 7 nap átlagánál ~{abs(d):.0f}%-kal {irany} "
                          f"fogyasztás várható · Delta V10 · CatBoost ML")
         else:
             kontextus = "Delta V10 · CatBoost ML"
+        if nap_cimke == "Ma":
+            kontextus += " · a holnapi előrejelzés a ~14:00-s DAM-aukció után készül el"
         fogy_panel=html.Div([
             html.Div(f"{nap_cimke.upper()}I FOGYASZTÁS-ELŐREJELZÉS",
                 style={"fontSize":"13px","fontWeight":"700","color":C['wh']}),
@@ -1209,6 +1240,96 @@ def elemzes(dam_target,edf,data,target_atlag,nap_cimke):
     lay_h["xaxis"]["title"]="€/MWh"; lay_h["yaxis"]["title"]="Órák száma"
     fig_h.update_layout(**lay_h)
 
+    # ================= HŐMÉRSÉKLET — izzó pontokkal =================
+    if edf is not None:
+        tmp = [float(v) for v in edf["homerseklet"].tolist()]
+        t_lo, t_hi = min(tmp), max(tmp)
+        fig_t = go.Figure()
+        # izzás: több áttetsző pont-réteg a fő pontok alatt
+        for meret, opac in [(22,0.08),(15,0.14),(10,0.25)]:
+            fig_t.add_trace(go.Scatter(x=list(range(24)),y=tmp,mode="markers",
+                marker=dict(size=meret,color="#4da3ff",opacity=opac),
+                hoverinfo="skip",showlegend=False))
+        fig_t.add_trace(go.Scatter(x=list(range(24)),y=tmp,mode="lines",
+            line=dict(color="#4da3ff",width=2),hoverinfo="skip",showlegend=False))
+        fig_t.add_trace(go.Scatter(x=list(range(24)),y=tmp,mode="markers+text",
+            marker=dict(size=6,color="#bfe0ff",line=dict(width=1.4,color="#4da3ff")),
+            text=[f"{tmp[i]:.0f}°" if i % 2 == 0 else "" for i in range(24)],
+            textposition="top center",textfont=dict(size=10,color=C['wh']),
+            hovertemplate="%{x}:00<br>%{y:.1f} °C<extra></extra>",showlegend=False))
+        ikonok = data.get("target_ikonok")
+        if ikonok and len(ikonok) >= 24:
+            iy = t_lo - max((t_hi-t_lo)*0.30, 2.0)
+            fig_t.add_trace(go.Scatter(x=list(range(0,24,3)),y=[iy]*8,mode="text",
+                text=[ikonok[i] for i in range(0,24,3)],
+                textfont=dict(size=18,color=[
+                    "#f59e0b" if ikonok[i]=="☀" else "#94a3b8"
+                    for i in range(0,24,3)]),
+                hoverinfo="skip",showlegend=False))
+        fig_t.update_layout(paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color=C['mut'],family='Inter,sans-serif',size=10),
+            margin=dict(l=36,r=14,t=18,b=28),height=250,showlegend=False,
+            xaxis=dict(range=[-0.6,23.6],tickvals=list(range(0,24,3)),
+                ticktext=[f"{x:02d}:00" for x in range(0,24,3)],
+                gridcolor="#101f35",color=C['mut'],zeroline=False,fixedrange=True),
+            yaxis=dict(range=[t_lo-max((t_hi-t_lo)*0.55,3.5), t_hi+max((t_hi-t_lo)*0.30,2.5)],
+                gridcolor="#101f35",color=C['mut'],zeroline=False,fixedrange=True))
+        homerseklet_panel = html.Div([
+            html.Div(f"{nap_cimke.upper()}I HŐMÉRSÉKLET (°C)",
+                style={"fontSize":"13px","fontWeight":"700","color":C['wh']}),
+            html.Div("A Delta V10 kulcs-feature-je: hűtési igény",
+                style={"fontSize":"11px","color":"#94a3b8","marginTop":"3px"}),
+            dcc.Graph(figure=fig_t,config={"displayModeBar":False},
+                style={"height":"250px"})
+        ],style=CS)
+    else:
+        homerseklet_panel = hianyzo_panel("Hőmérséklet",
+            "Az órás hőmérséklet-előrejelzéshez szükséges forrás nem elérhető.")
+
+    # ================= MEGÚJULÓ TERMELÉS =================
+    tfc = data.get("target_fc")
+    if tfc and tfc.get("nap") and tfc.get("szel"):
+        nap_mw = [float(v) for v in tfc["nap"]]
+        szel_mw = [float(v) for v in tfc["szel"]]
+        fig_r = go.Figure()
+        fig_r.add_trace(go.Scatter(x=list(range(24)),y=szel_mw,mode="lines",
+            name="Szélerőmű-termelés",line=dict(color="#7fc0ee",width=2),
+            fill="tozeroy",fillcolor="rgba(75,156,211,0.25)",
+            hovertemplate="%{x}:00<br>%{y:,.0f} MW<extra>Szél</extra>"))
+        fig_r.add_trace(go.Scatter(x=list(range(24)),y=nap_mw,mode="lines",
+            name="Napelem-termelés",line=dict(color="#ff9800",width=2.4),
+            fill="tozeroy",fillcolor="rgba(255,152,0,0.45)",
+            hovertemplate="%{x}:00<br>%{y:,.0f} MW<extra>Nap</extra>"))
+        i_n = int(np.argmax(nap_mw))
+        if nap_mw[i_n] > 0:
+            fig_r.add_annotation(x=i_n,y=nap_mw[i_n],
+                text=(f"Déli csúcs: {nap_mw[i_n]:,.0f} MW napenergia<br>"
+                      f"→ ezért olcsó délben az áram").replace(","," "),
+                showarrow=True,arrowhead=0,ax=76,ay=-4,
+                bgcolor="#0f1d31",bordercolor="#ff9800",borderwidth=1,borderpad=6,
+                font=dict(color=C['wh'],size=10))
+        fig_r.update_layout(paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color=C['mut'],family='Inter,sans-serif',size=10),
+            margin=dict(l=44,r=14,t=18,b=28),height=250,
+            legend=dict(orientation="h",yanchor="bottom",y=1.02,
+                bgcolor="rgba(0,0,0,0)",font=dict(size=9,color="#94a3b8")),
+            xaxis=dict(range=[-0.4,23.4],tickvals=list(range(0,24,3)),
+                ticktext=[f"{x:02d}:00" for x in range(0,24,3)],
+                gridcolor="#101f35",color=C['mut'],zeroline=False,fixedrange=True),
+            yaxis=dict(title="MW",gridcolor="#101f35",color=C['mut'],
+                zeroline=False,fixedrange=True))
+        termeles_panel = html.Div([
+            html.Div("MEGÚJULÓ TERMELÉS (MW)",
+                style={"fontSize":"13px","fontWeight":"700","color":C['wh']}),
+            html.Div(f"Ez hajtja a {nap_cimke.lower()}i árgörbét · hivatalos napelőtti előrejelzés",
+                style={"fontSize":"11px","color":"#94a3b8","marginTop":"3px"}),
+            dcc.Graph(figure=fig_r,config={"displayModeBar":False},
+                style={"height":"250px"})
+        ],style=CS)
+    else:
+        termeles_panel = hianyzo_panel("Megújuló termelés",
+            "A nap/szél termelés-előrejelzés jelenleg nem elérhető.")
+
     return html.Div([
         html.Div("Energiaelemzés",style={"fontSize":"16px","fontWeight":"600","color":C['wh'],"marginBottom":"14px"}),
         dbc.Row([
@@ -1219,6 +1340,10 @@ def elemzes(dam_target,edf,data,target_atlag,nap_cimke):
             dbc.Col(menetrend_panel,md=8),
             dbc.Col(html.Div([dcc.Graph(figure=fig_h,config={"displayModeBar":False},
                 style={"height":"220px"})],style=CS),md=4)
+        ],className="g-3 mb-3"),
+        dbc.Row([
+            dbc.Col(homerseklet_panel,md=6),
+            dbc.Col(termeles_panel,md=6)
         ],className="g-3")
     ])
 
