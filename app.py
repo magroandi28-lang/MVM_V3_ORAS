@@ -261,7 +261,13 @@ def get_dam():
             target, target_nap, prev = napok[ma_d], "ma", napok[tegnap]
         # A mai nap natív (negyedórás) felbontású görbéje a hero-kártyához
         mai = arak[arak.index.date == ma_d]
+        # A holnapi negyedórás görbe a 2. oldal menetrend-szalagjához (ha már publikált)
+        holnapi = arak[arak.index.date == holnap]
+        holnap_negyed = ({"ido":[t.isoformat() for t in holnapi.index],
+                          "ar":[float(x) for x in holnapi.values]}
+                         if len(holnapi) > 0 else None)
         return {"target":target,"prev":prev,"ma":napok[ma_d],"target_nap":target_nap,
+                "holnap_negyed":holnap_negyed,
                 "ma_negyed":{"ido":[t.isoformat() for t in mai.index],
                              "ar":[float(x) for x in mai.values]}},True
     except Exception as e:
@@ -680,6 +686,7 @@ def fetch(n,_manual):
         "dam_target":dam["target"],"dam_ma":dam["ma"],
         "dam_target_nap":dam["target_nap"],
         "ma_negyed":dam["ma_negyed"],
+        "holnap_negyed":dam.get("holnap_negyed"),
         "ido_forras":ido_forras if ido_ok else None,
         "aho":aho if ho_ok else None,
         "mert_fogyasztas":mert,
@@ -1060,7 +1067,7 @@ def elemzes(dam_target,edf,data,target_atlag,nap_cimke):
             d = (float(np.mean(y)) / float(np.mean(heti)) - 1) * 100
             irany = "magasabb" if d >= 0 else "alacsonyabb"
             kontextus = (f"A heti átlagnál ~{abs(d):.0f}%-kal {irany} "
-                         f"fogyasztás várható · Delta 10 modell")
+                         f"fogyasztás várható · Delta V10 · CatBoost ML")
         else:
             kontextus = "Delta V10 · CatBoost ML"
         fogy_panel=html.Div([
@@ -1068,7 +1075,8 @@ def elemzes(dam_target,edf,data,target_atlag,nap_cimke):
                 style={"fontSize":"13px","fontWeight":"700","color":C['wh']}),
             html.Div(kontextus,style={"fontSize":"11px","color":"#94a3b8",
                 "marginTop":"3px","marginBottom":"6px"}),
-            dcc.Graph(figure=fig,config={"displayModeBar":False})
+            dcc.Graph(figure=fig,config={"displayModeBar":False},
+                style={"height":"300px"})
         ],style=CS)
     else:
         fogy_panel=hianyzo_panel("Fogyasztás-előrejelzés",
@@ -1094,15 +1102,104 @@ def elemzes(dam_target,edf,data,target_atlag,nap_cimke):
     else:
         ido_panel=hianyzo_panel("Időjárás előrejelzés","Időjárás-adat jelenleg egyik forrásból sem elérhető.")
 
-    szinek=[dam_szin(a,target_atlag) for a in dam_target]
-    fig_d=go.Figure()
-    for i in range(len(dam_target)-1):
-        fig_d.add_trace(go.Scatter(x=[orak[i],orak[i+1]],y=[dam_target[i],dam_target[i+1]],
-            mode="lines",line=dict(color=szinek[i],width=3),showlegend=False,hoverinfo="skip"))
-    fig_d.add_hline(y=0,line=dict(color=C['brd'],width=1,dash="dot"))
-    lay_d=dict(**CHART); lay_d["height"]=220
-    lay_d["title"]=dict(text=f"{nap_cimke}i DAM árgörbe (órás átlag)",font=dict(size=12,color=C['wh']))
-    fig_d.update_layout(**lay_d)
+    # ================= HOLNAP MENETRENDJE =================
+    hn = data.get("holnap_negyed")
+    holnap_d = _ma() + timedelta(days=1)
+    napok_hu = ["hétfő","kedd","szerda","csütörtök","péntek","szombat","vasárnap"]
+    honapok_hu = ["január","február","március","április","május","június","július",
+                  "augusztus","szeptember","október","november","december"]
+    datum_txt = f"{napok_hu[holnap_d.weekday()]}, {honapok_hu[holnap_d.month-1]} {holnap_d.day}."
+
+    def negyed_szin(a):
+        if a < -10: return "#00bfae"
+        if a < 0:   return "#00e0c2"
+        if a < 50:  return "#c9df16"
+        if a < 100: return "#ff9800"
+        return "#ff3b30"
+
+    if hn and hn.get("ar"):
+        h_idok = [datetime.fromisoformat(t) for t in hn["ido"]]
+        h_arak = [float(a) for a in hn["ar"]]
+        n = len(h_arak)
+        lepes = 15 if n > 30 else 60
+        ablak = max(1, 60 // lepes)
+        atl = [(i, float(np.mean(h_arak[i:i+ablak]))) for i in range(n-ablak+1)]
+        bi, b_ar = min(atl, key=lambda x: x[1])
+        b0 = h_idok[bi]; b1 = b0 + timedelta(hours=1)
+        di, d_ar = max(atl, key=lambda x: x[1])
+        d0 = h_idok[di]; d1 = d0 + timedelta(hours=1)
+        napi_atlag = float(np.mean(h_arak))
+
+        slot_ms = lepes*60*1000
+        fig_m = go.Figure(go.Bar(x=h_idok, y=[1]*n, width=slot_ms,
+            marker=dict(color=[negyed_szin(a) for a in h_arak], line=dict(width=0)),
+            customdata=h_arak,
+            hovertemplate="%{x|%H:%M}<br>%{customdata:.0f} €/MWh<extra></extra>",
+            showlegend=False))
+        # legjobb töltési ablak: zöld keret + felirat felül
+        fig_m.add_shape(type="rect", x0=b0, x1=b1, y0=-0.06, y1=1.06,
+            line=dict(color="#10b981", width=2))
+        fig_m.add_annotation(x=b0+(b1-b0)/2, y=1.06,
+            text=f"<b>LEGJOBB TÖLTÉS  {b0:%H:%M}–{b1:%H:%M} · {b_ar:.0f} €/MWh</b>",
+            showarrow=True, arrowhead=2, arrowcolor="#10b981", ax=0, ay=-30,
+            bgcolor="#0f1d31", bordercolor="#10b981", borderwidth=1, borderpad=5,
+            font=dict(color="#10b981", size=11))
+        # legdrágább sáv: piros felirat alul
+        fig_m.add_annotation(x=d0+(d1-d0)/2, y=-0.06,
+            text=f"KERÜLENDŐ  {d0:%H:%M}–{d1:%H:%M} · {d_ar:.0f} €/MWh",
+            showarrow=True, arrowhead=2, arrowcolor="#ff3b30", ax=0, ay=30,
+            bgcolor="#0f1d31", bordercolor="#3a1d1d", borderwidth=1, borderpad=4,
+            font=dict(color="#ff6b61", size=10))
+        fig_m.update_layout(paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color=C['mut'],family='Inter,sans-serif',size=10),
+            margin=dict(l=10,r=10,t=48,b=52),height=200,showlegend=False,
+            barmode="overlay",bargap=0,
+            xaxis=dict(type="date",showgrid=False,color=C['mut'],
+                tickformat="%H:%M",dtick=3*60*60*1000,fixedrange=True,
+                range=[h_idok[0], h_idok[0]+timedelta(days=1)]),
+            yaxis=dict(visible=False,range=[-0.15,1.15],fixedrange=True))
+
+        if napi_atlag > 0:
+            osszefoglalo = (f"Napi átlag: {napi_atlag:.0f} €/MWh · a legjobb ablakban "
+                            f"az átlagár {max(b_ar,0)/napi_atlag*100:.0f}%-áért tölthetsz")
+        else:
+            osszefoglalo = f"Napi átlag: {napi_atlag:.0f} €/MWh"
+        menetrend_panel = html.Div([
+            html.Div("HOLNAP MENETRENDJE",
+                style={"fontSize":"13px","fontWeight":"700","color":C['wh']}),
+            html.Div(f"{datum_txt} · {n} negyedórás ár a napelőtti aukcióról",
+                style={"fontSize":"11px","color":"#94a3b8","marginTop":"3px"}),
+            dcc.Graph(figure=fig_m,config={"displayModeBar":False},
+                style={"height":"200px"}),
+            html.Div(osszefoglalo,
+                style={"fontSize":"11px","color":C['txt'],"marginTop":"2px"})
+        ],style=CS)
+    else:
+        # publikálás előtt: visszaszámláló az aukcióig + edukáció
+        most_h = _helyi_most()
+        aukcio = most_h.replace(hour=13, minute=45, second=0, microsecond=0)
+        if most_h < aukcio:
+            delta_p = int((aukcio - most_h).total_seconds() // 60)
+            o_, p_ = divmod(delta_p, 60)
+            hatra = f"még {o_} óra {p_} perc" if o_ else f"még {p_} perc"
+        else:
+            hatra = "az eredmény hamarosan megérkezik"
+        menetrend_panel = html.Div([
+            html.Div("HOLNAP MENETRENDJE",
+                style={"fontSize":"13px","fontWeight":"700","color":C['wh'],
+                       "textAlign":"left"}),
+            html.Div("◷",style={"fontSize":"30px","color":C['yw'],
+                "textAlign":"center","marginTop":"18px"}),
+            html.Div("A holnapi árak az EPEX napelőtti aukción születnek — ~13:45-kor",
+                style={"fontSize":"13px","fontWeight":"600","color":C['wh'],
+                       "textAlign":"center","marginTop":"8px"}),
+            html.Div(hatra,style={"fontSize":"15px","fontWeight":"700",
+                "color":C['yw'],"textAlign":"center","marginTop":"6px"}),
+            html.Div("Mind a 96 negyedórás ár egyszerre, egy napra előre dől el — "
+                     "ezért tud az OkosMérő már ma estére holnapi tervet adni.",
+                style={"fontSize":"11px","color":"#94a3b8","textAlign":"center",
+                       "marginTop":"12px"})
+        ],style={**CS,"minHeight":"280px"})
 
     fig_h=go.Figure()
     fig_h.add_trace(go.Histogram(x=dam_target,nbinsx=12,marker=dict(color=C['bl'],opacity=0.8),
@@ -1119,8 +1216,9 @@ def elemzes(dam_target,edf,data,target_atlag,nap_cimke):
             dbc.Col(ido_panel,md=4)
         ],className="g-3 mb-3"),
         dbc.Row([
-            dbc.Col(html.Div([dcc.Graph(figure=fig_d,config={"displayModeBar":False})],style=CS),md=6),
-            dbc.Col(html.Div([dcc.Graph(figure=fig_h,config={"displayModeBar":False})],style=CS),md=6)
+            dbc.Col(menetrend_panel,md=8),
+            dbc.Col(html.Div([dcc.Graph(figure=fig_h,config={"displayModeBar":False},
+                style={"height":"220px"})],style=CS),md=4)
         ],className="g-3")
     ])
 
