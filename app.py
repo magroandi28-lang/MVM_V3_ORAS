@@ -1114,25 +1114,6 @@ def elemzes(dam_target,edf,data,target_atlag,nap_cimke):
             "Az előrejelzéshez szükséges élő adatforrások egyike jelenleg nem elérhető. "
             "A panel automatikusan megjelenik, amint minden forrás él.")
 
-    daily=data.get("daily") or {}
-    n=min(4,len(daily.get("max",[]) or []))
-    if n>0:
-        ido_panel=html.Div([
-            html.Div("Időjárás előrejelzés",style={"fontSize":"11px","fontWeight":"500","color":C['wh'],"marginBottom":"12px"}),
-            html.Div([html.Div([
-                html.Div(ido_ikon(daily["code"][i] if i<len(daily.get("code",[])) else None),
-                    style={"fontSize":"22px","textAlign":"center"}),
-                html.Div("Holnap" if i==0 else f"+{i} nap",style={"fontSize":"8px","color":C['mut'],"textAlign":"center"}),
-                html.Div(f"{daily['max'][i]:.0f}°C" if daily['max'][i] is not None else "–",
-                    style={"fontSize":"14px","fontWeight":"500","color":C['or'],"textAlign":"center"}),
-                html.Div(f"{daily['min'][i]:.0f}°C" if daily['min'][i] is not None else "–",
-                    style={"fontSize":"9px","color":C['mut'],"textAlign":"center"})
-            ],style={"background":C['card2'],"borderRadius":"8px","padding":"10px","flex":"1"})
-            for i in range(n)],style={"display":"flex","gap":"8px"})
-        ],style=CS)
-    else:
-        ido_panel=hianyzo_panel("Időjárás előrejelzés","Időjárás-adat jelenleg egyik forrásból sem elérhető.")
-
     # ================= HOLNAP MENETRENDJE =================
     hn = data.get("holnap_negyed")
     holnap_d = _ma() + timedelta(days=1)
@@ -1232,14 +1213,6 @@ def elemzes(dam_target,edf,data,target_atlag,nap_cimke):
                        "marginTop":"12px"})
         ],style={**CS,"minHeight":"280px"})
 
-    fig_h=go.Figure()
-    fig_h.add_trace(go.Histogram(x=dam_target,nbinsx=12,marker=dict(color=C['bl'],opacity=0.8),
-        hovertemplate="%{x:.0f} €/MWh — %{y} óra<extra></extra>"))
-    lay_h=dict(**CHART); lay_h["height"]=220
-    lay_h["title"]=dict(text="DAM ár eloszlás",font=dict(size=12,color=C['wh']))
-    lay_h["xaxis"]["title"]="€/MWh"; lay_h["yaxis"]["title"]="Órák száma"
-    fig_h.update_layout(**lay_h)
-
     # ================= HŐMÉRSÉKLET — izzó pontokkal =================
     if edf is not None:
         tmp = [float(v) for v in edf["homerseklet"].tolist()]
@@ -1274,17 +1247,18 @@ def elemzes(dam_target,edf,data,target_atlag,nap_cimke):
                 gridcolor="#101f35",color=C['mut'],zeroline=False,fixedrange=True),
             yaxis=dict(range=[t_lo-max((t_hi-t_lo)*0.55,3.5), t_hi+max((t_hi-t_lo)*0.30,2.5)],
                 gridcolor="#101f35",color=C['mut'],zeroline=False,fixedrange=True))
-        homerseklet_panel = html.Div([
+        homerseklet_resz = [
             html.Div(f"{nap_cimke.upper()}I HŐMÉRSÉKLET (°C)",
                 style={"fontSize":"13px","fontWeight":"700","color":C['wh']}),
             html.Div("A Delta V10 kulcs-feature-je: hűtési igény",
                 style={"fontSize":"11px","color":"#94a3b8","marginTop":"3px"}),
             dcc.Graph(figure=fig_t,config={"displayModeBar":False},
                 style={"height":"250px"})
-        ],style=CS)
+        ]
     else:
-        homerseklet_panel = hianyzo_panel("Hőmérséklet",
-            "Az órás hőmérséklet-előrejelzéshez szükséges forrás nem elérhető.")
+        homerseklet_resz = [html.Div(
+            "Az órás hőmérséklet-előrejelzés jelenleg nem elérhető.",
+            style={"fontSize":"11px","color":C['mut']})]
 
     # ================= MEGÚJULÓ TERMELÉS =================
     tfc = data.get("target_fc")
@@ -1294,11 +1268,11 @@ def elemzes(dam_target,edf,data,target_atlag,nap_cimke):
         fig_r = go.Figure()
         fig_r.add_trace(go.Scatter(x=list(range(24)),y=szel_mw,mode="lines",
             name="Szélerőmű-termelés",line=dict(color="#7fc0ee",width=2),
-            fill="tozeroy",fillcolor="rgba(75,156,211,0.25)",
+            fill="tozeroy",fillcolor="rgba(75,156,211,0.32)",
             hovertemplate="%{x}:00<br>%{y:,.0f} MW<extra>Szél</extra>"))
         fig_r.add_trace(go.Scatter(x=list(range(24)),y=nap_mw,mode="lines",
-            name="Napelem-termelés",line=dict(color="#ff9800",width=2.4),
-            fill="tozeroy",fillcolor="rgba(255,152,0,0.45)",
+            name="Napelem-termelés",line=dict(color="#ffa726",width=2.6),
+            fill="tozeroy",fillcolor="rgba(255,152,0,0.62)",
             hovertemplate="%{x}:00<br>%{y:,.0f} MW<extra>Nap</extra>"))
         i_n = int(np.argmax(nap_mw))
         if nap_mw[i_n] > 0:
@@ -1318,33 +1292,27 @@ def elemzes(dam_target,edf,data,target_atlag,nap_cimke):
                 gridcolor="#101f35",color=C['mut'],zeroline=False,fixedrange=True),
             yaxis=dict(title="MW",gridcolor="#101f35",color=C['mut'],
                 zeroline=False,fixedrange=True))
-        termeles_panel = html.Div([
+        termeles_resz = [
             html.Div("MEGÚJULÓ TERMELÉS (MW)",
-                style={"fontSize":"13px","fontWeight":"700","color":C['wh']}),
+                style={"fontSize":"13px","fontWeight":"700","color":C['wh'],
+                       "marginTop":"16px"}),
             html.Div(f"Ez hajtja a {nap_cimke.lower()}i árgörbét · hivatalos napelőtti előrejelzés",
                 style={"fontSize":"11px","color":"#94a3b8","marginTop":"3px"}),
             dcc.Graph(figure=fig_r,config={"displayModeBar":False},
                 style={"height":"250px"})
-        ],style=CS)
+        ]
     else:
-        termeles_panel = hianyzo_panel("Megújuló termelés",
-            "A nap/szél termelés-előrejelzés jelenleg nem elérhető.")
+        termeles_resz = [html.Div(
+            "A nap/szél termelés-előrejelzés jelenleg nem elérhető.",
+            style={"fontSize":"11px","color":C['mut'],"marginTop":"16px"})]
+
+    idojaras_panel = html.Div(homerseklet_resz + termeles_resz, style=CS)
 
     return html.Div([
         html.Div("Energiaelemzés",style={"fontSize":"16px","fontWeight":"600","color":C['wh'],"marginBottom":"14px"}),
-        dbc.Row([
-            dbc.Col(fogy_panel,md=8),
-            dbc.Col(ido_panel,md=4)
-        ],className="g-3 mb-3"),
-        dbc.Row([
-            dbc.Col(menetrend_panel,md=8),
-            dbc.Col(html.Div([dcc.Graph(figure=fig_h,config={"displayModeBar":False},
-                style={"height":"220px"})],style=CS),md=4)
-        ],className="g-3 mb-3"),
-        dbc.Row([
-            dbc.Col(homerseklet_panel,md=6),
-            dbc.Col(termeles_panel,md=6)
-        ],className="g-3")
+        dbc.Row([dbc.Col(fogy_panel,md=12)],className="g-3 mb-3"),
+        dbc.Row([dbc.Col(menetrend_panel,md=12)],className="g-3 mb-3"),
+        dbc.Row([dbc.Col(idojaras_panel,md=12)],className="g-3")
     ])
 
 def mllabor(data):
