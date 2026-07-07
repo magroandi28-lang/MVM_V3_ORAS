@@ -1062,7 +1062,7 @@ def elemzes(dam_target,edf,data,target_atlag,nap_cimke):
             kontextus = (f"A heti átlagnál ~{abs(d):.0f}%-kal {irany} "
                          f"fogyasztás várható · Delta 10 modell")
         else:
-            kontextus = "Delta 10 modell"
+            kontextus = "Delta V10 · CatBoost ML"
         fogy_panel=html.Div([
             html.Div(f"{nap_cimke.upper()}I FOGYASZTÁS-ELŐREJELZÉS",
                 style={"fontSize":"13px","fontWeight":"700","color":C['wh']}),
