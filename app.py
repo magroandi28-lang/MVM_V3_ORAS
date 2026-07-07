@@ -666,6 +666,14 @@ def fetch(n,_manual):
     if load_ok:
         mert = {"ertek":float(load.iloc[-1]),"idopont":load.index.max().strftime("%H:%M")}
 
+    heti_atlag = None
+    if load_ok:
+        try:
+            u7 = load.tail(7*24)
+            heti_atlag = [float(u7[u7.index.hour == o].mean()) for o in range(24)]
+        except Exception as e:
+            print(f"[HIBA] Heti átlag: {e}", flush=True)
+
     return {"kritikus_hiba":False,
         "eredm":eredm,
         "eur_huf":eur_huf if eur_ok else None,
@@ -675,6 +683,7 @@ def fetch(n,_manual):
         "ido_forras":ido_forras if ido_ok else None,
         "aho":aho if ho_ok else None,
         "mert_fogyasztas":mert,
+        "heti_atlag":heti_atlag,
         "stl":stl_data,
         "daily":daily if ido_ok else None,
         "frissites":_helyi_most().strftime("%H:%M:%S"),
@@ -978,19 +987,89 @@ def elemzes(dam_target,edf,data,target_atlag,nap_cimke):
     orak=[f"{h:02d}:00" for h in range(24)]
 
     if edf is not None:
-        fig=make_subplots(specs=[[{"secondary_y":True}]])
-        fig.add_trace(go.Scatter(x=orak[:len(edf)],y=edf["fogyasztas"].tolist(),name="Fogyasztás (MWh)",
-            mode="lines",fill="tozeroy",line=dict(color=C['bl'],width=2),
-            fillcolor="rgba(0,102,204,0.1)"),secondary_y=False)
-        fig.add_trace(go.Scatter(x=orak[:len(edf)],y=edf["homerseklet"].tolist(),name="Hőmérséklet (°C)",
-            mode="lines",line=dict(color=C['yw'],width=2,dash="dot")),secondary_y=True)
-        lay=dict(**CHART); lay["height"]=280; lay["showlegend"]=True
-        lay["legend"]=dict(orientation="h",yanchor="bottom",y=1.02,bgcolor="rgba(0,0,0,0)",font=dict(size=10,color=C['txt']))
-        lay["title"]=dict(text=f"{nap_cimke}i fogyasztás-előrejelzés (CatBoost) + hőmérséklet",font=dict(size=12,color=C['wh']))
-        fig.update_layout(**lay)
-        fig.update_yaxes(title_text="MWh",gridcolor=C['brd'],color=C['mut'],secondary_y=False)
-        fig.update_yaxes(title_text="°C",gridcolor="rgba(0,0,0,0)",color=C['mut'],secondary_y=True)
-        fogy_panel=html.Div([dcc.Graph(figure=fig,config={"displayModeBar":False})],style=CS)
+        y = [float(v) for v in edf["fogyasztas"].tolist()]
+        y_lo, y_hi = min(y), max(y)
+
+        def terheles_szin(v):
+            """A terhelés szintje szerinti szín: hűvös kék → sárga → izzó piros."""
+            t = 0.0 if y_hi == y_lo else (v - y_lo) / (y_hi - y_lo)
+            allomasok = [(0.0,(47,127,214)),(0.35,(77,163,255)),(0.6,(230,223,0)),
+                         (0.8,(255,152,0)),(1.0,(255,59,48))]
+            for (t0,c0),(t1,c1) in zip(allomasok, allomasok[1:]):
+                if t <= t1:
+                    a = 0.0 if t1 == t0 else (t - t0) / (t1 - t0)
+                    return (f"rgb({int(c0[0]+(c1[0]-c0[0])*a)},"
+                            f"{int(c0[1]+(c1[1]-c0[1])*a)},"
+                            f"{int(c0[2]+(c1[2]-c0[2])*a)})")
+            return "rgb(255,59,48)"
+
+        fig = go.Figure()
+        # napszak-zónák a háttérben, felirattal
+        for zx0,zx1,zszin,znev,ztszin in [
+                (0,6,"#0a1a33","Éjszaka","#4b6a94"),
+                (6,9,"#10233c","Reggel","#6f8fb8"),
+                (9,16,"#0d1f30","Napközben","#7fa3c4"),
+                (16,21,"#2a1a0e","Esti csúcs","#d99a5b"),
+                (21,23.99,"#0a1a33","Éjszaka","#4b6a94")]:
+            fig.add_vrect(x0=zx0,x1=zx1,fillcolor=zszin,opacity=0.5,line_width=0,layer="below")
+            fig.add_annotation(x=(zx0+zx1)/2,y=1.07,yref="paper",text=znev,
+                showarrow=False,font=dict(size=10,color=ztszin))
+        # neon-izzás: több áttetsző réteg + éles fő vonal, szakaszonként színezve
+        for i in range(len(y)-1):
+            szin = terheles_szin((y[i]+y[i+1])/2)
+            for w,op in [(12,0.05),(8,0.09),(5,0.15)]:
+                fig.add_trace(go.Scatter(x=[i,i+1],y=[y[i],y[i+1]],mode="lines",
+                    line=dict(color=szin,width=w),opacity=op,
+                    hoverinfo="skip",showlegend=False))
+            fig.add_trace(go.Scatter(x=[i,i+1],y=[y[i],y[i+1]],mode="lines",
+                line=dict(color=szin,width=2.6),
+                hoverinfo="skip",showlegend=False))
+        # hover-pontok óránként
+        fig.add_trace(go.Scatter(x=list(range(len(y))),y=y,mode="markers",
+            marker=dict(size=10,color="rgba(0,0,0,0)"),
+            hovertemplate="%{x}:00<br>%{y:,.0f} MWh<extra></extra>",showlegend=False))
+        # csúcs és minimum kiemelése
+        i_max = int(np.argmax(y)); i_min = int(np.argmin(y))
+        fig.add_trace(go.Scatter(x=[i_max],y=[y[i_max]],mode="markers",
+            marker=dict(size=9,color=C['wh'],line=dict(width=2,color="#ff3b30")),
+            hoverinfo="skip",showlegend=False))
+        fig.add_annotation(x=i_max,y=y[i_max],
+            text=f"<b>Csúcs: {i_max}:00 — {y[i_max]:,.0f} MWh</b>".replace(","," "),
+            showarrow=True,arrowhead=0,ax=-64,ay=-36,bgcolor="#0f1d31",
+            bordercolor="#ff3b30",borderwidth=1,borderpad=6,
+            font=dict(color=C['wh'],size=11))
+        fig.add_trace(go.Scatter(x=[i_min],y=[y[i_min]],mode="markers",
+            marker=dict(size=8,color=C['wh'],line=dict(width=2,color="#4da3ff")),
+            hoverinfo="skip",showlegend=False))
+        fig.add_annotation(x=i_min,y=y[i_min],
+            text=f"Minimum: {i_min}:00 — {y[i_min]:,.0f} MWh".replace(","," "),
+            showarrow=True,arrowhead=0,ax=64,ay=36,bgcolor="#0f1d31",
+            bordercolor="#2a3a4c",borderwidth=1,borderpad=5,
+            font=dict(color="#94a3b8",size=10))
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color=C['mut'],family='Inter,sans-serif',size=10),
+            margin=dict(l=46,r=16,t=34,b=30),height=300,showlegend=False,
+            xaxis=dict(range=[0,len(y)-1],tickvals=list(range(0,24,3)),
+                ticktext=[f"{x:02d}:00" for x in range(0,24,3)],
+                gridcolor="#101f35",color=C['mut'],zeroline=False,fixedrange=True),
+            yaxis=dict(title="MWh",gridcolor="#101f35",color=C['mut'],
+                zeroline=False,fixedrange=True))
+        # kontextus-sor: a heti azonos órás átlaghoz viszonyítva
+        heti = data.get("heti_atlag")
+        if heti and all(v == v for v in heti):
+            d = (float(np.mean(y)) / float(np.mean(heti)) - 1) * 100
+            irany = "magasabb" if d >= 0 else "alacsonyabb"
+            kontextus = (f"A heti átlagnál ~{abs(d):.0f}%-kal {irany} "
+                         f"fogyasztás várható · Delta 10 modell")
+        else:
+            kontextus = "Delta 10 modell"
+        fogy_panel=html.Div([
+            html.Div(f"{nap_cimke.upper()}I FOGYASZTÁS-ELŐREJELZÉS",
+                style={"fontSize":"13px","fontWeight":"700","color":C['wh']}),
+            html.Div(kontextus,style={"fontSize":"11px","color":"#94a3b8",
+                "marginTop":"3px","marginBottom":"6px"}),
+            dcc.Graph(figure=fig,config={"displayModeBar":False})
+        ],style=CS)
     else:
         fogy_panel=hianyzo_panel("Fogyasztás-előrejelzés",
             "Az előrejelzéshez szükséges élő adatforrások egyike jelenleg nem elérhető. "
