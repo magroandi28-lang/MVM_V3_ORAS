@@ -1,3 +1,4 @@
+import base64
 import dash
 from dash import html, dcc, callback, Input, Output
 import dash_bootstrap_components as dbc
@@ -543,63 +544,50 @@ def _rgba(hex_color, alpha):
 
 
 def _mini_sparkline(trend, szin):
-    """Alsó mini vonaldiagram. Direkt külön alsó zónában fut, nem a szöveg mögött."""
+    """Alsó mini vonaldiagram — beágyazott SVG (nem Plotly), callbackben is mindig renderel."""
     if trend is None:
         return None
-
     try:
         y = [float(v) for v in trend if v is not None and not pd.isna(v)]
     except Exception:
         y = []
-
     if len(y) < 2:
         return None
 
+    W, H, pad = 300.0, 40.0, 3.0
     ymin, ymax = min(y), max(y)
-    pad = max((ymax - ymin) * 0.24, 1.0)
+    rng = (ymax - ymin) or 1.0
+    n = len(y)
+    X = lambda i: pad + i * (W - 2 * pad) / (n - 1)
+    Y = lambda v: H - pad - ((v - ymin) / rng) * (H - 2 * pad - 6)
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        y=y,
-        mode="lines",
-        line=dict(color=szin, width=2.1, shape="spline"),
-        fill="tozeroy",
-        fillcolor=_rgba(szin, 0.055),
-        hoverinfo="skip",
-        showlegend=False
-    ))
-    fig.add_trace(go.Scatter(
-        x=[len(y)-1],
-        y=[y[-1]],
-        mode="markers",
-        marker=dict(size=7, color=szin, line=dict(width=1.1, color="rgba(255,255,255,.78)")),
-        hoverinfo="skip",
-        showlegend=False
-    ))
-    fig.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=0, r=0, t=0, b=0),
-        height=36,
-        xaxis=dict(visible=False, fixedrange=True),
-        yaxis=dict(visible=False, fixedrange=True, range=[ymin-pad, ymax+pad]),
-        showlegend=False
+    d = f"M {X(0):.1f} {Y(y[0]):.1f}"
+    for i in range(1, n):
+        cx = (X(i - 1) + X(i)) / 2
+        my = (Y(y[i - 1]) + Y(y[i])) / 2
+        d += f" Q {X(i-1):.1f} {Y(y[i-1]):.1f} {cx:.1f} {my:.1f} T {X(i):.1f} {Y(y[i]):.1f}"
+    area = d + f" L {X(n-1):.1f} 40 L {X(0):.1f} 40 Z"
+
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 40" preserveAspectRatio="none">'
+        f'<path d="{area}" fill="{_rgba(szin, 0.07)}"/>'
+        f'<path d="{d}" fill="none" stroke="{szin}" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>'
+        '</svg>'
     )
-
-    return dcc.Graph(
-        figure=fig,
-        config={"displayModeBar": False, "staticPlot": True},
+    b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    return html.Img(
+        src="data:image/svg+xml;base64," + b64,
         style={
             "position": "absolute",
             "left": "13px",
-            "right": "13px",
+            "width": "calc(100% - 26px)",
             "bottom": "10px",
             "height": "36px",
             "zIndex": "2",
-            "pointerEvents": "none"
-        }
+            "pointerEvents": "none",
+        },
     )
-
 
 def _budapest_silhouette():
     """Külső asset nélküli Országház + híd sziluett a Budapest-kártyára."""
@@ -657,20 +645,38 @@ def _budapest_silhouette():
 
 
 def _fx_texture(szin):
-    return html.Div(style={
-        "position": "absolute",
-        "right": "8px",
-        "bottom": "8px",
-        "width": "58%",
-        "height": "52px",
-        "opacity": "0.30",
-        "zIndex": "1",
-        "pointerEvents": "none",
-        "backgroundImage": f"radial-gradient(circle, {_rgba(szin, 0.70)} 1px, transparent 1.6px)",
-        "backgroundSize": "7px 7px",
-        "maskImage": "radial-gradient(ellipse at center, black 0%, transparent 72%)",
-        "WebkitMaskImage": "radial-gradient(ellipse at center, black 0%, transparent 72%)"
-    })
+    """EUR/HUF hullámzó pontháló — beágyazott SVG, finom kis pöttyök, lágy hullám."""
+    W, H, cols, rows = 220.0, 84.0, 20, 8
+    dots = []
+    for r in range(rows):
+        depth = r / (rows - 1)
+        rad = 0.6 + depth * 0.8
+        op = 0.20 + depth * 0.55
+        for c in range(cols):
+            x = 8 + c * (W - 16) / (cols - 1)
+            y = 14 + r * (H - 22) / (rows - 1) + math.sin(c * 0.5 + r * 0.6) * 3.1
+            dots.append(
+                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{rad:.2f}" '
+                f'fill="{szin}" fill-opacity="{op:.2f}"/>'
+            )
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 84" '
+        'preserveAspectRatio="xMidYMid meet">' + "".join(dots) + "</svg>"
+    )
+    b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    return html.Img(
+        src="data:image/svg+xml;base64," + b64,
+        style={
+            "position": "absolute",
+            "right": "6px",
+            "bottom": "8px",
+            "width": "62%",
+            "height": "56px",
+            "opacity": "0.95",
+            "zIndex": "1",
+            "pointerEvents": "none",
+        },
+    )
 
 
 def _segment_bar(szin):
@@ -1119,7 +1125,7 @@ def render(data,oldal,_clock):
             f"ENTSO-E mérés, {mert['idopont']}" if mert else "Nem elérhető",
             C['bl'], edf["fogyasztas"].tolist() if edf is not None else None),
         kpi("Budapest",f"{aho:.0f} °C" if aho is not None else "–","Most",C['yw']),
-        kpi("EUR/HUF",f"{eur_huf:.1f} Ft" if eur_huf is not None else "–","Árfolyam",C['txt']),
+        kpi("EUR/HUF",f"{eur_huf:.1f} Ft" if eur_huf is not None else "–","Árfolyam","#2f80d6"),
         kpi("Legolcsóbb ma",legolcs_txt,"Hátralévő órákból",C['gr']),
         kpi("Adatminőség-őr",f"{stl_db} / {stl_tot}" if data["stl"] else "–",
             "Anomália, elmúlt 30 nap mérés",C['or'] if stl_db > 0 else C['gr']),
