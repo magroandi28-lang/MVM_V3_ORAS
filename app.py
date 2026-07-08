@@ -1161,131 +1161,160 @@ def elemzes(dam_target,edf,data,target_atlag,nap_cimke):
             "Az órás hőmérséklet-előrejelzés jelenleg nem elérhető.",
             style={"fontSize":"11px","color":C['mut']})]
 
-    # ================= MEGÚJULÓ TERMELÉS — modern nap/szél panel =================
+    # ================= MEGÚJULÓ TERMELÉS — arany oszlop + szél vonal + napi összesítő =================
     tfc = data.get("target_fc")
     if tfc and tfc.get("nap") and tfc.get("szel"):
         nap_mw = [float(v) for v in tfc["nap"]]
         szel_mw = [float(v) for v in tfc["szel"]]
         x = list(range(24))
 
-        nap_max_i = int(np.argmax(nap_mw))
-        szel_max_i = int(np.argmax(szel_mw))
-        nap_max = float(max(nap_mw))
-        szel_max = float(max(szel_mw))
-        nap_mwh = float(np.sum(nap_mw))
-        szel_mwh = float(np.sum(szel_mw))
-        mix_total = max(nap_mwh + szel_mwh, 1.0)
-        nap_resz = nap_mwh / mix_total * 100
-        szel_resz = szel_mwh / mix_total * 100
+        nap_max_i = int(np.argmax(nap_mw)); szel_max_i = int(np.argmax(szel_mw))
+        nap_max = float(max(nap_mw)); szel_max = float(max(szel_mw))
+        nap_mwh = float(np.sum(nap_mw)); szel_mwh = float(np.sum(szel_mw))
+        ossz_mwh = nap_mwh + szel_mwh
+        nap_resz = nap_mwh / max(ossz_mwh, 1.0) * 100
+        szel_resz = 100 - nap_resz
+        ossz_ora = [nap_mw[i] + szel_mw[i] for i in range(24)]
+        best_ora = int(np.argmax(ossz_ora))
 
-        fig_r = make_subplots(rows=2, cols=1, shared_xaxes=True,
-            vertical_spacing=0.07, row_heights=[0.58,0.42])
+        NAP = "#f59e0b"; NAP_CS = "#ffd75e"; SZEL = "#4dd0e1"; OSSZ = C['gr']
 
-        # háttér napszak-zónák mindkét panelen
-        for row in [1, 2]:
-            for x0, x1, szin in [(0,6,"#071426"),(6,9,"#10233c"),(9,16,"#1f2718"),(16,21,"#261a10"),(21,24,"#071426")]:
-                fig_r.add_vrect(x0=x0, x1=x1, fillcolor=szin, opacity=0.32,
-                    line_width=0, layer="below", row=row, col=1)
+        # --- Napenergia: finoman felbontott arany oszlopsor, csak a csúcs erős ---
+        sub = 4
+        xs = list(np.linspace(0, 23, 23 * sub + 1))
+        nap_s = list(np.interp(xs, x, nap_mw))
+        nap_pk = int(np.argmax(nap_s))
+        bar_szin = [NAP] * len(nap_s); bar_szin[nap_pk] = NAP_CS
 
-        # NAPENERGIA: glow + terület + fő vonal
-        fig_r.add_trace(go.Scatter(x=x, y=nap_mw, mode="lines",
-            line=dict(color="rgba(255,183,77,0.18)", width=14),
+        fig_r = make_subplots(rows=2, cols=1, shared_xaxes=False,
+            vertical_spacing=0.22, row_heights=[0.5, 0.5])
+
+        fig_r.add_trace(go.Bar(x=xs, y=nap_s,
+            marker=dict(color=bar_szin, line=dict(width=0)),
+            width=(23.0 / (len(xs) - 1)) * 0.62,
+            hovertemplate="%{x:.0f}:00<br>%{y:,.0f} MW<extra>Napenergia</extra>"), row=1, col=1)
+        for r_, o_ in [(16, 0.10), (11, 0.16), (7, 0.26)]:
+            fig_r.add_trace(go.Scatter(x=[xs[nap_pk]], y=[nap_s[nap_pk]], mode="markers",
+                marker=dict(size=r_, color=NAP_CS, opacity=o_),
+                hoverinfo="skip", showlegend=False), row=1, col=1)
+        fig_r.add_trace(go.Scatter(x=[xs[nap_pk]], y=[nap_s[nap_pk]], mode="markers",
+            marker=dict(size=8, color="#fff6d9", line=dict(width=1.6, color=NAP_CS)),
             hoverinfo="skip", showlegend=False), row=1, col=1)
-        fig_r.add_trace(go.Scatter(x=x, y=nap_mw, mode="lines",
-            name="Napenergia", line=dict(color="#ffb74d", width=3.2),
-            fill="tozeroy", fillcolor="rgba(255,183,77,0.22)",
-            hovertemplate="%{x:02d}:00<br>%{y:,.0f} MW<extra>Napenergia</extra>"), row=1, col=1)
-        fig_r.add_trace(go.Scatter(x=[nap_max_i], y=[nap_max], mode="markers",
-            marker=dict(size=15, color="#fff7cc", line=dict(width=3, color="#ffb74d")),
-            hoverinfo="skip", showlegend=False), row=1, col=1)
-        fig_r.add_annotation(x=nap_max_i, y=nap_max,
-            text=f"<b>Nap csúcs</b><br>{nap_max:,.0f} MW".replace(","," "),
-            showarrow=True, arrowhead=0, ax=58, ay=-28,
-            bgcolor="#101b2d", bordercolor="#ffb74d", borderwidth=1, borderpad=6,
+        fig_r.add_annotation(x=xs[nap_pk], y=nap_s[nap_pk],
+            text=f"Csúcs: {nap_max_i:02d}:00 — {nap_max:,.0f} MW".replace(",", " "),
+            showarrow=True, arrowhead=0, ax=0, ay=-30,
+            bgcolor="#101b2d", bordercolor=NAP, borderwidth=1, borderpad=6,
             font=dict(color=C['wh'], size=10), row=1, col=1)
 
-        # SZÉLENERGIA: neon vonal + terület
+        # --- Szélenergia: rétegzett glow + terület + vonal + pontok + pici turbinák ---
+        for r_, o_ in [(14, 0.07), (9, 0.13), (6, 0.22)]:
+            fig_r.add_trace(go.Scatter(x=x, y=szel_mw, mode="markers",
+                marker=dict(size=r_, color=SZEL, opacity=o_),
+                hoverinfo="skip", showlegend=False), row=2, col=1)
         fig_r.add_trace(go.Scatter(x=x, y=szel_mw, mode="lines",
-            line=dict(color="rgba(77,208,225,0.16)", width=13),
-            hoverinfo="skip", showlegend=False), row=2, col=1)
+            line=dict(color="rgba(0,0,0,0)"), fill="tozeroy",
+            fillcolor="rgba(77,208,225,0.09)", hoverinfo="skip", showlegend=False), row=2, col=1)
         fig_r.add_trace(go.Scatter(x=x, y=szel_mw, mode="lines+markers",
-            name="Szélenergia", line=dict(color="#4dd0e1", width=2.8),
-            marker=dict(size=5, color="#b2f5ff", line=dict(width=1.5, color="#4dd0e1")),
-            fill="tozeroy", fillcolor="rgba(77,208,225,0.18)",
+            line=dict(color=SZEL, width=2),
+            marker=dict(size=5.5, color="#d4f6fc", line=dict(width=1.3, color=SZEL)),
             hovertemplate="%{x:02d}:00<br>%{y:,.0f} MW<extra>Szélenergia</extra>"), row=2, col=1)
 
-        # Minimalista szélturbina-markerek: nem minden pontra, csak ritmusosan + csúcspont
-        szel_range = max(max(szel_mw) - min(szel_mw), 1.0)
-        shaft = max(szel_range * 0.11, max(szel_mw) * 0.035, 20.0)
-        blade_y = max(szel_range * 0.065, 12.0)
-        blade_x = 0.23
-        turbina_idx = sorted(set([3,6,9,12,15,18,21, szel_max_i]))
-        for i in turbina_idx:
-            y0 = szel_mw[i]
-            y1 = y0 + shaft
-            # oszlop
-            fig_r.add_shape(type="line", x0=i, x1=i, y0=y0, y1=y1,
-                line=dict(color="#d9fbff", width=1.4), row=2, col=1)
-            # három lapát
-            fig_r.add_shape(type="line", x0=i, x1=i+blade_x, y0=y1, y1=y1+blade_y,
-                line=dict(color="#d9fbff", width=1.25), row=2, col=1)
-            fig_r.add_shape(type="line", x0=i, x1=i-blade_x, y0=y1, y1=y1+blade_y*0.55,
-                line=dict(color="#d9fbff", width=1.25), row=2, col=1)
-            fig_r.add_shape(type="line", x0=i, x1=i, y0=y1, y1=y1-blade_y*0.9,
-                line=dict(color="#d9fbff", width=1.25), row=2, col=1)
-            fig_r.add_trace(go.Scatter(x=[i], y=[y1], mode="markers",
-                marker=dict(size=5, color="#ffffff", line=dict(width=1, color="#4dd0e1")),
-                hoverinfo="skip", showlegend=False), row=2, col=1)
-
-        fig_r.add_annotation(x=szel_max_i, y=szel_mw[szel_max_i] + shaft,
-            text=f"<b>Szél csúcs</b><br>{szel_max:,.0f} MW".replace(","," "),
-            showarrow=True, arrowhead=0, ax=-58, ay=-28,
-            bgcolor="#101b2d", bordercolor="#4dd0e1", borderwidth=1, borderpad=6,
+        szel_top = max(szel_max * 1.30, 1.0)
+        pole_h = szel_top * 0.075; blade_h = pole_h * 0.75; bdx = 0.34
+        for i in [3, 10, 16, 21]:
+            base_y = szel_mw[i] + pole_h * 0.5; hub_y = base_y + pole_h
+            fig_r.add_shape(type="line", x0=i, x1=i, y0=base_y, y1=hub_y,
+                line=dict(color="#a9ecf5", width=1), row=2, col=1)
+            fig_r.add_shape(type="line", x0=i, x1=i, y0=hub_y, y1=hub_y + blade_h,
+                line=dict(color="#a9ecf5", width=1), row=2, col=1)
+            fig_r.add_shape(type="line", x0=i, x1=i + bdx, y0=hub_y, y1=hub_y - blade_h * 0.5,
+                line=dict(color="#a9ecf5", width=1), row=2, col=1)
+            fig_r.add_shape(type="line", x0=i, x1=i - bdx, y0=hub_y, y1=hub_y - blade_h * 0.5,
+                line=dict(color="#a9ecf5", width=1), row=2, col=1)
+        fig_r.add_annotation(x=szel_max_i, y=szel_max,
+            text=f"Csúcs: {szel_max_i:02d}:00 — {szel_max:,.0f} MW".replace(",", " "),
+            showarrow=True, arrowhead=0, ax=0, ay=-26,
+            bgcolor="#101b2d", bordercolor=SZEL, borderwidth=1, borderpad=6,
             font=dict(color=C['wh'], size=10), row=2, col=1)
 
         fig_r.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
             font=dict(color=C['mut'], family='Inter,sans-serif', size=10),
-            margin=dict(l=48, r=18, t=20, b=34), height=390, showlegend=False,
-            hovermode="x unified")
-        fig_r.update_xaxes(range=[-0.4,23.4], tickvals=list(range(0,24,3)),
-            ticktext=[f"{h:02d}:00" for h in range(0,24,3)],
-            gridcolor="#101f35", color=C['mut'], zeroline=False, fixedrange=True, row=2, col=1)
-        fig_r.update_xaxes(showticklabels=False, gridcolor="#101f35", color=C['mut'],
-            zeroline=False, fixedrange=True, row=1, col=1)
-        fig_r.update_yaxes(title="Nap MW", gridcolor="#101f35", color=C['mut'],
-            zeroline=False, fixedrange=True, row=1, col=1)
-        fig_r.update_yaxes(title="Szél MW", gridcolor="#101f35", color=C['mut'],
-            zeroline=False, fixedrange=True, row=2, col=1)
+            margin=dict(l=44, r=16, t=14, b=34), height=440, showlegend=False, bargap=0)
+        for rr in [1, 2]:
+            fig_r.update_xaxes(range=[-0.5, 23.5], tickvals=list(range(0, 24, 3)),
+                ticktext=[f"{h:02d}:00" for h in range(0, 24, 3)],
+                gridcolor="#101f35", color=C['mut'], zeroline=False, fixedrange=True, row=rr, col=1)
+        fig_r.update_yaxes(title_text="MW", range=[0, nap_max * 1.18], gridcolor="#101f35",
+            color=C['mut'], zeroline=False, fixedrange=True, row=1, col=1)
+        fig_r.update_yaxes(title_text="MW", range=[0, szel_top], gridcolor="#101f35",
+            color=C['mut'], zeroline=False, fixedrange=True, row=2, col=1)
 
-        termeles_resz = [
+        # --- Napi összesítő (a meglévő metrika-kártya stílusban) ---
+        def _okartya(cimke, ertek, egyseg, szin, ikon):
+            return html.Div([
+                html.Div([
+                    html.Span(ikon, style={"color": szin, "fontSize": "12px", "marginRight": "6px"}),
+                    html.Span(cimke, style={"fontSize": "8px", "color": C['mut'],
+                        "textTransform": "uppercase", "letterSpacing": "0.03em"})
+                ], style={"display": "flex", "alignItems": "center"}),
+                html.Div([
+                    html.Span(ertek, style={"fontSize": "13px", "fontWeight": "500", "color": szin}),
+                    html.Span(f" {egyseg}", style={"fontSize": "9px", "color": C['mut']})
+                ], style={"marginTop": "2px"})
+            ], style={"background": C['card2'], "borderRadius": "8px", "padding": "9px", "marginBottom": "5px"})
+
+        def _osor(cimke, ertek, szin, ikon):
+            return html.Div([
+                html.Span([html.Span(ikon, style={"color": szin, "marginRight": "5px"}), cimke],
+                    style={"fontSize": "10px", "color": C['mut']}),
+                html.Span(ertek, style={"fontSize": "10px", "color": szin, "fontWeight": "500"})
+            ], style={"display": "flex", "justifyContent": "space-between", "padding": "4px 2px"})
+
+        osszesito = html.Div([
+            html.Div("MAI ÖSSZESÍTÉS", style={"fontSize": "11px", "fontWeight": "500",
+                "color": C['wh'], "marginBottom": "10px"}),
+            _okartya("Napenergia összesen", f"{nap_mwh:,.0f}".replace(",", " "), "MWh", NAP, "☀"),
+            _okartya("Szélenergia összesen", f"{szel_mwh:,.0f}".replace(",", " "), "MWh", SZEL, "◇"),
+            _okartya("Összes megújuló", f"{ossz_mwh:,.0f}".replace(",", " "), "MWh", OSSZ, "∑"),
+            html.Div(style={"borderTop": f"1px solid {C['brd']}", "marginTop": "4px", "marginBottom": "2px"}),
+            _osor("Legjobb óra", f"{best_ora:02d}:00", "#7cb8ff", "★"),
+            _osor("Nap csúcs", f"{nap_max_i:02d}:00 · {nap_max:,.0f} MW".replace(",", " "), NAP, "☀"),
+            _osor("Szél csúcs", f"{szel_max_i:02d}:00 · {szel_max:,.0f} MW".replace(",", " "), SZEL, "◇"),
+            html.Div("Nap / szél arány", style={"fontSize": "9px", "color": C['mut'],
+                "marginTop": "8px", "marginBottom": "5px"}),
             html.Div([
-                html.Div([
-                    html.Div("MEGÚJULÓ ENERGIA", style={"fontSize":"13px","fontWeight":"700","color":C['wh']}),
-                    html.Div(f"{nap_cimke} · hivatalos napelőtti nap/szél előrejelzés",
-                        style={"fontSize":"11px","color":"#94a3b8","marginTop":"3px"})
-                ]),
-                html.Div([
-                    html.Div([html.Span("☀", style={"color":"#ffb74d","marginRight":"6px"}),
-                              html.Span(f"Nap {nap_resz:.0f}% · {nap_max:,.0f} MW csúcs".replace(","," "))],
-                        className="renewable-pill"),
-                    html.Div([html.Span("◇", style={"color":"#4dd0e1","marginRight":"6px"}),
-                              html.Span(f"Szél {szel_resz:.0f}% · {szel_max:,.0f} MW csúcs".replace(","," "))],
-                        className="renewable-pill")
-                ], style={"display":"flex","gap":"8px","flexWrap":"wrap"})
-            ], style={"display":"flex","justifyContent":"space-between","gap":"12px","alignItems":"flex-start","marginBottom":"8px"}),
-            dcc.Graph(figure=fig_r, config={"displayModeBar":False}, style={"height":"390px"})
-        ]
-    else:
-        termeles_resz = [html.Div(
-            "A nap/szél termelés-előrejelzés jelenleg nem elérhető.",
-            style={"fontSize":"11px","color":C['mut'],"marginTop":"16px"})]
+                html.Div(style={"width": f"{nap_resz:.0f}%", "background": NAP}),
+                html.Div(style={"flex": "1", "background": SZEL})
+            ], style={"display": "flex", "height": "9px", "borderRadius": "5px",
+                "overflow": "hidden", "background": C['card2']}),
+            html.Div([
+                html.Span(f"Nap {nap_resz:.0f}%", style={"fontSize": "9px", "color": NAP}),
+                html.Span(f"Szél {szel_resz:.0f}%", style={"fontSize": "9px", "color": SZEL})
+            ], style={"display": "flex", "justifyContent": "space-between", "marginTop": "5px"})
+        ], style={"paddingLeft": "4px"})
 
-    # 2. oldal: Fogyasztás + Időjárás felül, Megújuló energia alul.
+        megujulo_panel = html.Div([
+            html.Div("MEGÚJULÓ ENERGIA", style={"fontSize": "13px", "fontWeight": "700", "color": C['wh']}),
+            html.Div(f"{nap_cimke} · hivatalos napelőtti nap/szél előrejelzés (ENTSO-E)",
+                style={"fontSize": "11px", "color": "#94a3b8", "marginTop": "3px"}),
+            dbc.Row([
+                dbc.Col(dcc.Graph(figure=fig_r, config={"displayModeBar": False},
+                    style={"height": "440px"}), lg=8, md=12),
+                dbc.Col(osszesito, lg=4, md=12),
+            ], className="g-3", style={"marginTop": "12px"})
+        ], style=CS)
+    else:
+        megujulo_panel = html.Div([
+            html.Div("MEGÚJULÓ ENERGIA", style={"fontSize": "13px", "fontWeight": "700", "color": C['wh']}),
+            html.Div("A nap/szél termelés-előrejelzés jelenleg nem elérhető.",
+                style={"fontSize": "11px", "color": C['mut'], "marginTop": "16px"})
+        ], style=CS)
+
     idojaras_panel = html.Div(homerseklet_resz, style=CS)
-    megujulo_panel = html.Div(termeles_resz, style=CS)
 
     return html.Div([
-        html.Div("Energiaelemzés",style={"fontSize":"16px","fontWeight":"600","color":C['wh'],"marginBottom":"14px"}),
+        html.Div("Energiaelemzés", style={"fontSize": "16px", "fontWeight": "600",
+            "color": C['wh'], "marginBottom": "14px"}),
         dbc.Row([
             dbc.Col(fogy_panel, lg=8, md=12),
             dbc.Col(idojaras_panel, lg=4, md=12),
