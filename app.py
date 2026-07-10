@@ -16,6 +16,10 @@ from zoneinfo import ZoneInfo
 from statsmodels.tsa.seasonal import STL
 import holidays
 from dotenv import load_dotenv
+try:
+    import psycopg
+except ImportError:
+    psycopg = None
 load_dotenv()
 
 app = dash.Dash(__name__,
@@ -28,8 +32,132 @@ server = app.server
 BASE = os.path.dirname(os.path.abspath(__file__))
 ENTSOE_API_KEY = os.environ.get("ENTSOE_API_KEY","")
 VISUAL_CROSSING_KEY = os.environ.get("VISUAL_CROSSING_KEY","")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 BUDAPEST_TZ = ZoneInfo("Europe/Budapest")
 hu_holidays = holidays.Hungary(years=list(range(2015,2028)))
+
+MODEL_VERSION = "catboost-v10"
+
+
+def save_forecast_log(forecast, generated_at, input_quality_label,
+                      stl_anomaly_lag_count, source_type, mavir_forecast=None):
+    """Best-effort forecast persistence; database errors must not break Dash."""
+    if not forecast:
+        return
+    if not DATABASE_URL:
+        print("[INFO] DATABASE_URL nincs beallitva - forecast_log mentes kihagyva", flush=True)
+        return
+    if psycopg is None:
+        print("[HIBA] A psycopg csomag hianyzik - forecast_log mentes kihagyva", flush=True)
+        return
+
+    generated_at = pd.Timestamp(generated_at)
+    if generated_at.tzinfo is None:
+        generated_at = generated_at.tz_localize(BUDAPEST_TZ)
+    run_id = f"{MODEL_VERSION}-{generated_at:%Y%m%dT%H}"
+    mavir_forecast = mavir_forecast or {}
+    rows = []
+    for horizon_h, item in enumerate(forecast, start=1):
+        target_time = pd.Timestamp(item["datum"])
+        mavir_value = mavir_forecast.get(target_time)
+        if target_time.tzinfo is None:
+            target_time = target_time.tz_localize(BUDAPEST_TZ)
+        rows.append((
+            run_id,
+            generated_at.to_pydatetime(),
+            target_time.to_pydatetime(),
+            horizon_h,
+            float(item["fogyasztas"]),
+            float(mavir_value) if mavir_value is not None else None,
+            None,  # Filled later when the actual value becomes available.
+            None,
+            None,
+            MODEL_VERSION,
+            input_quality_label,
+            int(stl_anomaly_lag_count or 0),
+            source_type,
+        ))
+
+    sql = """
+        insert into public.forecast_log (
+            run_id, generated_at, target_time, horizon_h,
+            catboost_pred_mwh, mavir_forecast_mwh, actual_mwh,
+            catboost_abs_error, mavir_abs_error, model_version,
+            input_quality_label, stl_anomaly_lag_count, source_type
+        ) values (
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+        )
+        on conflict (run_id, target_time) do update set
+            generated_at = excluded.generated_at,
+            horizon_h = excluded.horizon_h,
+            catboost_pred_mwh = excluded.catboost_pred_mwh,
+            mavir_forecast_mwh = excluded.mavir_forecast_mwh,
+            model_version = excluded.model_version,
+            input_quality_label = excluded.input_quality_label,
+            stl_anomaly_lag_count = excluded.stl_anomaly_lag_count,
+            source_type = excluded.source_type
+    """
+    try:
+        with psycopg.connect(DATABASE_URL, connect_timeout=10) as conn:
+            with conn.cursor() as cur:
+                cur.executemany(sql, rows)
+        print(f"[INFO] forecast_log mentve: {len(rows)} sor, run_id={run_id}", flush=True)
+    except Exception as e:
+        print(f"[HIBA] forecast_log mentes: {type(e).__name__}: {e}", flush=True)
+
+
+def backfill_forecast_actuals(load, now):
+    """Fill completed forecast rows with actual load and both absolute errors."""
+    if load is None or len(load) == 0 or not DATABASE_URL or psycopg is None:
+        return
+
+    now = pd.Timestamp(now)
+    completed_cutoff = now.floor("h") - pd.Timedelta(hours=1)
+    completed = load[load.index <= completed_cutoff]
+    if completed.empty:
+        return
+
+    now_aware = now.tz_localize(BUDAPEST_TZ)
+    first_time = now_aware - pd.Timedelta(days=18)
+    last_time = now_aware
+    try:
+        with psycopg.connect(DATABASE_URL, connect_timeout=10) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    select distinct target_time
+                    from public.forecast_log
+                    where actual_mwh is null
+                      and target_time between %s and %s
+                """, (first_time.to_pydatetime(), last_time.to_pydatetime()))
+                pending = [row[0] for row in cur.fetchall()]
+
+                updates = []
+                for target_time in pending:
+                    local_time = pd.Timestamp(target_time).tz_convert(BUDAPEST_TZ).tz_localize(None)
+                    if local_time not in completed.index:
+                        continue
+                    actual_value = completed.loc[local_time]
+                    if isinstance(actual_value, pd.Series):
+                        actual_value = actual_value.mean()
+                    actual = float(actual_value)
+                    updates.append((actual, actual, actual, target_time))
+
+                if updates:
+                    cur.executemany("""
+                        update public.forecast_log
+                        set actual_mwh = %s,
+                            catboost_abs_error = abs(catboost_pred_mwh - %s),
+                            mavir_abs_error = case
+                                when mavir_forecast_mwh is null then null
+                                else abs(mavir_forecast_mwh - %s)
+                            end
+                        where target_time = %s
+                          and actual_mwh is null
+                    """, updates)
+        if updates:
+            print(f"[INFO] forecast_log tenyadat visszatoltve: {len(updates)} celora", flush=True)
+    except Exception as e:
+        print(f"[HIBA] forecast_log tenyadat-visszatoltes: {type(e).__name__}: {e}", flush=True)
 
 C = {'bg':'#050d1a','sb':'#070f1e','card':'#0a1628','card2':'#0f1923','brd':'#1a2d42',
      'txt':'#cbd5e1','mut':'#64748b','or':'#FF6600','gr':'#10b981','bl':'#0066CC',
@@ -322,6 +450,26 @@ def get_load():
         return load,True
     except Exception as e:
         print(f"[HIBA] ENTSO-E (fogyasztás): {e}", flush=True)
+        return None,False
+
+def get_load_forecast():
+    """ENTSO-E/MAVIR official load forecast, normalized to local hourly timestamps."""
+    if not ENTSOE_API_KEY: return None,False
+    try:
+        c = _entsoe(); ma = _ma()
+        s = pd.Timestamp((ma-timedelta(days=1)).strftime("%Y-%m-%d"),tz="Europe/Budapest")
+        e = pd.Timestamp((ma+timedelta(days=3)).strftime("%Y-%m-%d"),tz="Europe/Budapest")
+        forecast = c.query_load_forecast("HU",start=s,end=e)
+        if isinstance(forecast,pd.DataFrame): forecast = forecast.iloc[:,0]
+        forecast = forecast.resample('h').mean().dropna()
+        forecast = _helyi(forecast)
+        values = _orasra(forecast)
+        if not values:
+            print("[HIBA] ENTSO-E (fogyasztasi elorejelzes): ures valasz", flush=True)
+            return None,False
+        return {t.isoformat():v for t,v in values.items()},True
+    except Exception as e:
+        print(f"[HIBA] ENTSO-E (fogyasztasi elorejelzes): {e}", flush=True)
         return None,False
 
 def get_naposzel_fc():
@@ -843,6 +991,8 @@ def fetch(n,_manual):
                                              gen=gen_ora, force=manual)
     dam,dam_ok = cachelt("dam", 1800, get_dam, 1, gen=gen_aukcio, force=manual)
     load,load_ok = cachelt("load", 3600, get_load, 1, gen=gen_ora, force=manual)
+    mavir_fc,mavir_fc_ok = cachelt("load_forecast", 3600, get_load_forecast, 1,
+                                   gen=gen_aukcio, force=manual)
     fcs,fc_ok = cachelt("napszelfc", 3600, get_naposzel_fc, 1, gen=gen_aukcio, force=manual)
     aho,ho_ok = cachelt("homerseklet", 1800, get_ho_barmelyik, 1, gen=gen_ora, force=manual)
     term,term_ok = cachelt("termeles", 1800, get_termeles, 1, gen=gen_ora, force=manual)
@@ -949,6 +1099,22 @@ def fetch(n,_manual):
             heti_atlag = [float(u7[u7.index.hour == o].mean()) for o in range(24)]
         except Exception as e:
             print(f"[HIBA] Heti átlag: {e}", flush=True)
+
+    if eredm:
+        input_quality_label = "complete" if not hianyzo else "degraded"
+        mavir_forecast = ({pd.Timestamp(k):float(v) for k,v in mavir_fc.items()}
+                          if mavir_fc_ok else {})
+        save_forecast_log(
+            forecast=eredm,
+            generated_at=most,
+            input_quality_label=input_quality_label,
+            stl_anomaly_lag_count=(stl_data or {}).get("anomalia_db", 0),
+            source_type="manual" if manual else "automatic",
+            mavir_forecast=mavir_forecast,
+        )
+
+    if load_ok:
+        backfill_forecast_actuals(load, most)
 
     return {"kritikus_hiba":False,
         "eredm":eredm,
