@@ -11,3 +11,4 @@ entsoe-py
 catboost
 python-dotenv>=1.0
 gunicorn
+psycopg[binary]>=3.2,<4
