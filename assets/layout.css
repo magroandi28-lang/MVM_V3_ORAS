@@ -1396,7 +1396,12 @@ body {
   z-index: 3;
 }
 
-/* Dekorációs réteg — csak a 3. és 4. kártyán */
+/* Dekorációs réteg — csak a 3. és 4. kártyán.
+
+   A maszk szünteti meg az elválást: a kép felső 30%-a átlátszóból
+   úszik be a kártya gradiensébe, így nincs éles vonal a kép teteje
+   és a kártyaháttér között. Minden más (méret, opacity, fény)
+   változatlan. */
 #kpi-sor .kpi-grid > .kpi-card:nth-child(3)::after,
 #kpi-sor .kpi-grid > .kpi-card:nth-child(4)::after {
   content: "";
@@ -1406,6 +1411,8 @@ body {
   background-repeat: no-repeat;
   background-position: center bottom;
   background-size: 100% 100%;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 30%);
+  mask-image: linear-gradient(180deg, transparent 0%, #000 30%);
 }
 
 /* 3. Budapest kép */
