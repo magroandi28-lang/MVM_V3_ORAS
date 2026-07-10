@@ -1385,10 +1385,9 @@ body {
 
 
 /* ============================================================
-   SAFE KPI VIZUÁL VISSZAÁLLÍTÁS
-   CSAK látványt ad vissza.
-   Nem írja felül az app.py adatlogikáját, inline card_style-ját,
-   dinamikus színeit, pontjait, értékeit vagy számításait.
+   SAFE KPI VIZUÁL
+   Az 1. és 2. kártyán a valódi Plotly-görbe rajzol (app.py),
+   ezért itt CSAK a 3. és 4. kártya képe marad.
    ============================================================ */
 
 /* A szöveg maradjon a dekoráció fölött */
@@ -1397,9 +1396,7 @@ body {
   z-index: 3;
 }
 
-/* Dekorációs réteg az első 4 KPI-kártyára */
-#kpi-sor .kpi-grid > .kpi-card:nth-child(1)::after,
-#kpi-sor .kpi-grid > .kpi-card:nth-child(2)::after,
+/* Dekorációs réteg — csak a 3. és 4. kártyán */
 #kpi-sor .kpi-grid > .kpi-card:nth-child(3)::after,
 #kpi-sor .kpi-grid > .kpi-card:nth-child(4)::after {
   content: "";
@@ -1409,28 +1406,6 @@ body {
   background-repeat: no-repeat;
   background-position: center bottom;
   background-size: 100% 100%;
-}
-
-/* 1. DAM ár — narancs dekor vonaldiagram */
-#kpi-sor .kpi-grid > .kpi-card:nth-child(1)::after {
-  left: 14px;
-  right: 14px;
-  bottom: 9px;
-  height: 48px;
-  opacity: .95;
-  filter: drop-shadow(0 0 7px rgba(245,158,11,.55));
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 60' preserveAspectRatio='none'%3E%3Cpath d='M6 41 L24 37 L44 29 L62 31 L82 25 L102 29 L123 42 L145 49 L166 48 L187 54 L208 41 L229 29 L249 33 L269 24 L294 27' fill='none' stroke='%23f59e0b' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='294' cy='27' r='5' fill='%23f59e0b'/%3E%3C/svg%3E");
-}
-
-/* 2. Fogyasztás — kék dekor vonaldiagram */
-#kpi-sor .kpi-grid > .kpi-card:nth-child(2)::after {
-  left: 14px;
-  right: 14px;
-  bottom: 9px;
-  height: 48px;
-  opacity: .95;
-  filter: drop-shadow(0 0 7px rgba(30,144,255,.55));
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 60' preserveAspectRatio='none'%3E%3Cpath d='M6 35 L28 43 L51 48 L75 38 L97 27 L119 33 L141 42 L164 50 L188 43 L211 34 L232 18 L253 23 L274 21 L294 29' fill='none' stroke='%231e90ff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='294' cy='29' r='5' fill='%231e90ff'/%3E%3C/svg%3E");
 }
 
 /* 3. Budapest kép */
@@ -1458,4 +1433,3 @@ body {
   background-size: 100% auto;
   background-position: center bottom;
 }
-
