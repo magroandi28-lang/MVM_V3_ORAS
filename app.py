@@ -123,32 +123,16 @@ def save_pending_forecasts(forecast, generated_at, input_quality_label,
         ))
 
     sql = """
-        insert into public.forecast_pending (
-            run_id, generated_at, target_time, horizon_h,
-            catboost_pred_mwh, mavir_forecast_mwh, model_version,
-            input_quality_label, stl_anomaly_lag_count, source_type
-        )
-        select %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-        where not exists (
-            select 1
-            from public.forecast_log f
-            where f.target_time = %s
-        )
+        insert into public.stl_anomalia (
+            target_time, actual_mwh, expected_mwh, residual_mwh, threshold_mwh,
+            homerseklet_c, szelsebesseg_kmh, napsugarzas_w_m2, csapadek_mm,
+            dam_eur_mwh, ora, hetvege, unnepnap, kategoria
+        ) values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         on conflict (target_time) do update set
-            run_id = excluded.run_id,
-            generated_at = excluded.generated_at,
-            horizon_h = excluded.horizon_h,
-            catboost_pred_mwh = excluded.catboost_pred_mwh,
-            mavir_forecast_mwh = coalesce(
-                excluded.mavir_forecast_mwh,
-                public.forecast_pending.mavir_forecast_mwh
-            ),
-            model_version = excluded.model_version,
-            input_quality_label = excluded.input_quality_label,
-            stl_anomaly_lag_count = excluded.stl_anomaly_lag_count,
-            source_type = excluded.source_type,
-            updated_at = now()
-        where public.forecast_pending.generated_at <= excluded.generated_at
+            residual_mwh = excluded.residual_mwh,
+            expected_mwh = excluded.expected_mwh,
+            threshold_mwh = excluded.threshold_mwh,
+            kategoria = coalesce(excluded.kategoria, public.stl_anomalia.kategoria)
     """
 
     try:
