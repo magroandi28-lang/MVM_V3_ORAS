@@ -111,15 +111,30 @@ def backfill_forecast_actuals(load, now):
     if load is None or len(load) == 0 or not DATABASE_URL or psycopg is None:
         return
 
-    now = pd.Timestamp(now)
-    completed_cutoff = now.floor("h") - pd.Timedelta(hours=1)
-    completed = load[load.index <= completed_cutoff]
+    # ENTSO-E load is handled elsewhere as a naive Budapest wall-clock index.
+    # Normalize both sides to UTC whole hours before matching database rows.
+    load_utc = load.copy()
+    load_index = pd.DatetimeIndex(load_utc.index)
+    if load_index.tz is None:
+        load_index = load_index.tz_localize(
+            BUDAPEST_TZ, ambiguous="infer", nonexistent="shift_forward"
+        )
+    else:
+        load_index = load_index.tz_convert(BUDAPEST_TZ)
+    load_utc.index = load_index.tz_convert("UTC").floor("h")
+    load_utc = load_utc.groupby(level=0).mean().sort_index()
+
+    now_utc = pd.Timestamp(now)
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.tz_localize(BUDAPEST_TZ)
+    now_utc = now_utc.tz_convert("UTC")
+    completed_cutoff = now_utc.floor("h") - pd.Timedelta(hours=1)
+    completed = load_utc[load_utc.index <= completed_cutoff]
     if completed.empty:
         return
 
-    now_aware = now.tz_localize(BUDAPEST_TZ)
-    first_time = now_aware - pd.Timedelta(days=18)
-    last_time = now_aware
+    first_time = completed.index.min()
+    last_time = completed.index.max()
     try:
         with psycopg.connect(DATABASE_URL, connect_timeout=10) as conn:
             with conn.cursor() as cur:
@@ -133,13 +148,13 @@ def backfill_forecast_actuals(load, now):
 
                 updates = []
                 for target_time in pending:
-                    local_time = pd.Timestamp(target_time).tz_convert(BUDAPEST_TZ).tz_localize(None)
-                    if local_time not in completed.index:
+                    target_utc = pd.Timestamp(target_time)
+                    if target_utc.tzinfo is None:
+                        target_utc = target_utc.tz_localize("UTC")
+                    target_utc = target_utc.tz_convert("UTC").floor("h")
+                    if target_utc not in completed.index:
                         continue
-                    actual_value = completed.loc[local_time]
-                    if isinstance(actual_value, pd.Series):
-                        actual_value = actual_value.mean()
-                    actual = float(actual_value)
+                    actual = float(completed.loc[target_utc])
                     updates.append((actual, actual, actual, target_time))
 
                 if updates:
