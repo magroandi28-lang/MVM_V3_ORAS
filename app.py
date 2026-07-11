@@ -107,88 +107,66 @@ def save_forecast_log(forecast, generated_at, input_quality_label,
 
 
 def backfill_forecast_actuals(load, now):
-    """A lezárt ENTSO-E fogyasztási órák visszatöltése minden modellfutáshoz."""
+    """Lezárt órák tényadatának visszatöltése a forecast_log-ba.
+
+    A párosítást a Postgres végzi (unnest + join), nem Python. Így a
+    timestamp/timestamptz oszloptípus és az időzóna-értelmezés az
+    adatbázison belül marad konzisztens — ugyanaz a cast fut az
+    összehasonlításnál, mint a beszúrásnál. A régi Python-oldali
+    `if target_utc not in completed.index: continue` csendben eldobott
+    minden sort, ha az adatbázis más faliórával adta vissza az időt.
+    """
     if load is None or len(load) == 0 or not DATABASE_URL or psycopg is None:
         return
 
-    actuals = load.copy()
-    idx = pd.DatetimeIndex(actuals.index)
-
-    if idx.tz is None:
-        idx = idx.tz_localize(
-            BUDAPEST_TZ,
-            ambiguous="infer",
-            nonexistent="shift_forward"
+    # Mért fogyasztás -> UTC egész órák (mint eddig)
+    load_utc = load.copy()
+    load_index = pd.DatetimeIndex(load_utc.index)
+    if load_index.tz is None:
+        load_index = load_index.tz_localize(
+            BUDAPEST_TZ, ambiguous="infer", nonexistent="shift_forward"
         )
     else:
-        idx = idx.tz_convert(BUDAPEST_TZ)
-
-    actuals.index = idx.tz_convert("UTC").floor("h")
-    actuals = pd.to_numeric(actuals, errors="coerce")
-    actuals = actuals.groupby(level=0).mean().dropna().sort_index()
+        load_index = load_index.tz_convert(BUDAPEST_TZ)
+    load_utc.index = load_index.tz_convert("UTC").floor("h")
+    load_utc = load_utc.groupby(level=0).mean().sort_index()
 
     now_utc = pd.Timestamp(now)
     if now_utc.tzinfo is None:
         now_utc = now_utc.tz_localize(BUDAPEST_TZ)
-    now_utc = now_utc.tz_convert("UTC")
-
-    # A jelenlegi, még nem teljes óra kimarad.
-    actuals = actuals[actuals.index < now_utc.floor("h")]
-
-    if actuals.empty:
-        print("[INFO] Backfill: nincs lezárt ENTSO-E tényóra", flush=True)
+    completed_cutoff = now_utc.tz_convert("UTC").floor("h") - pd.Timedelta(hours=1)
+    completed = load_utc[load_utc.index <= completed_cutoff]
+    if completed.empty:
+        print("[INFO] forecast_log tenyadat: nincs lezart mert ora", flush=True)
         return
 
-    updates = []
-    for target_utc, value in actuals.items():
-        actual = float(value)
-        updates.append((
-            actual,
-            actual,
-            actual,
-            target_utc.to_pydatetime(),
-            (target_utc + pd.Timedelta(hours=1)).to_pydatetime(),
-        ))
+    times = [t.to_pydatetime() for t in completed.index]   # tz-aware UTC
+    vals = [float(v) for v in completed.values]
 
     sql = """
-        update public.forecast_log
-        set actual_mwh = %s,
-            catboost_abs_error = abs(catboost_pred_mwh - %s),
+        update public.forecast_log f
+        set actual_mwh = a.actual,
+            catboost_abs_error = abs(f.catboost_pred_mwh - a.actual),
             mavir_abs_error = case
-                when mavir_forecast_mwh is null then null
-                else abs(mavir_forecast_mwh - %s)
+                when f.mavir_forecast_mwh is null then null
+                else abs(f.mavir_forecast_mwh - a.actual)
             end
-        where target_time >= %s
-          and target_time < %s
-          and actual_mwh is null
+        from (
+            select unnest(%s::timestamptz[]) as target_time,
+                   unnest(%s::float8[]) as actual
+        ) a
+        where f.actual_mwh is null
+          and f.target_time = a.target_time
     """
-
     try:
         with psycopg.connect(DATABASE_URL, connect_timeout=10) as conn:
             with conn.cursor() as cur:
-                cur.executemany(sql, updates)
-
-                cur.execute("""
-                    select count(*)
-                    from public.forecast_log
-                    where actual_mwh is not null
-                """)
-                filled = cur.fetchone()[0]
-
-            conn.commit()
-
-        print(
-            f"[INFO] forecast_log tényadat-visszatöltés kész: "
-            f"{filled} kitöltött adatbázissor",
-            flush=True
-        )
-
+                cur.execute(sql, (times, vals))
+                frissitett = cur.rowcount
+        print(f"[INFO] forecast_log tenyadat: {frissitett} sor frissitve "
+              f"({len(vals)} lezart ora atadva)", flush=True)
     except Exception as e:
-        print(
-            f"[HIBA] forecast_log tényadat-visszatöltés: "
-            f"{type(e).__name__}: {e}",
-            flush=True
-        )
+        print(f"[HIBA] forecast_log tenyadat-visszatoltes: {type(e).__name__}: {e}", flush=True)
 C = {'bg':'#050d1a','sb':'#070f1e','card':'#0a1628','card2':'#0f1923','brd':'#1a2d42',
      'txt':'#cbd5e1','mut':'#64748b','or':'#FF6600','gr':'#10b981','bl':'#0066CC',
      'rd':'#ef4444','yw':'#f59e0b','cy':'#4b9cd3','wh':'#f1f5f9'}
