@@ -39,134 +39,216 @@ hu_holidays = holidays.Hungary(years=list(range(2015,2028)))
 MODEL_VERSION = "catboost-v10"
 
 
-def save_forecast_log(forecast, generated_at, input_quality_label,
-                      stl_anomaly_lag_count, source_type, mavir_forecast=None):
-    """Best-effort forecast persistence; database errors must not break Dash."""
-    if not forecast:
-        return
+def _db_available():
     if not DATABASE_URL:
-        print("[INFO] DATABASE_URL nincs beallitva - forecast_log mentes kihagyva", flush=True)
-        return
+        print("[INFO] DATABASE_URL nincs beallitva - forecast mentes kihagyva", flush=True)
+        return False
     if psycopg is None:
-        print("[HIBA] A psycopg csomag hianyzik - forecast_log mentes kihagyva", flush=True)
+        print("[HIBA] A psycopg csomag hianyzik - forecast mentes kihagyva", flush=True)
+        return False
+    return True
+
+
+def _aware_budapest(value):
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is None:
+        return ts.tz_localize(BUDAPEST_TZ, ambiguous=False, nonexistent="shift_forward")
+    return ts.tz_convert(BUDAPEST_TZ)
+
+
+def _completed_load_utc(load, now):
+    """Csak teljesen lezárt, órás tényadatok UTC időbélyeggel."""
+    if load is None or len(load) == 0:
+        return pd.Series(dtype="float64")
+
+    load_utc = load.copy()
+    idx = pd.DatetimeIndex(load_utc.index)
+    if idx.tz is None:
+        idx = idx.tz_localize(
+            BUDAPEST_TZ, ambiguous="infer", nonexistent="shift_forward"
+        )
+    else:
+        idx = idx.tz_convert(BUDAPEST_TZ)
+
+    load_utc.index = idx.tz_convert("UTC").floor("h")
+    load_utc = load_utc.groupby(level=0).mean().sort_index()
+
+    now_utc = _aware_budapest(now).tz_convert("UTC")
+    completed_cutoff = now_utc.floor("h") - pd.Timedelta(hours=1)
+    return load_utc[load_utc.index <= completed_cutoff]
+
+
+def save_pending_forecasts(forecast, generated_at, input_quality_label,
+                           stl_anomaly_lag_count, source_type,
+                           mavir_forecast=None):
+    """Az élő célórák legutolsó jóslata.
+
+    Célóránként pontosan egy ideiglenes sor marad. Újraszámoláskor csak
+    ezt a sort frissíti. A már lezárt forecast_log sorhoz soha nem nyúl.
+    """
+    if not forecast or not _db_available():
         return
 
-    generated_at = pd.Timestamp(generated_at)
-    if generated_at.tzinfo is None:
-        generated_at = generated_at.tz_localize(BUDAPEST_TZ)
-    run_id = f"{MODEL_VERSION}-{generated_at:%Y%m%dT%H}"
+    generated_at = _aware_budapest(generated_at)
+    run_id = f"{MODEL_VERSION}-{generated_at:%Y%m%dT%H%M%S%z}"
     mavir_forecast = mavir_forecast or {}
     rows = []
+
     for horizon_h, item in enumerate(forecast, start=1):
-        target_time = pd.Timestamp(item["datum"])
-        mavir_value = mavir_forecast.get(target_time)
-        if target_time.tzinfo is None:
-            target_time = target_time.tz_localize(BUDAPEST_TZ)
+        target_local = pd.Timestamp(item["datum"])
+        mavir_value = mavir_forecast.get(target_local)
+        target_time = _aware_budapest(target_local).tz_convert("UTC")
+
         rows.append((
             run_id,
             generated_at.to_pydatetime(),
             target_time.to_pydatetime(),
-            horizon_h,
+            int(horizon_h),
             float(item["fogyasztas"]),
             float(mavir_value) if mavir_value is not None else None,
-            None,  # Filled later when the actual value becomes available.
-            None,
-            None,
             MODEL_VERSION,
             input_quality_label,
             int(stl_anomaly_lag_count or 0),
             source_type,
+            target_time.to_pydatetime(),
         ))
 
     sql = """
-        insert into public.forecast_log (
+        insert into public.forecast_pending (
             run_id, generated_at, target_time, horizon_h,
-            catboost_pred_mwh, mavir_forecast_mwh, actual_mwh,
-            catboost_abs_error, mavir_abs_error, model_version,
+            catboost_pred_mwh, mavir_forecast_mwh, model_version,
             input_quality_label, stl_anomaly_lag_count, source_type
-        ) values (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
         )
-        on conflict (run_id, target_time) do update set
+        select %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+        where not exists (
+            select 1
+            from public.forecast_log f
+            where f.target_time = %s
+        )
+        on conflict (target_time) do update set
+            run_id = excluded.run_id,
             generated_at = excluded.generated_at,
             horizon_h = excluded.horizon_h,
             catboost_pred_mwh = excluded.catboost_pred_mwh,
-            mavir_forecast_mwh = excluded.mavir_forecast_mwh,
+            mavir_forecast_mwh = coalesce(
+                excluded.mavir_forecast_mwh,
+                public.forecast_pending.mavir_forecast_mwh
+            ),
             model_version = excluded.model_version,
             input_quality_label = excluded.input_quality_label,
             stl_anomaly_lag_count = excluded.stl_anomaly_lag_count,
-            source_type = excluded.source_type
+            source_type = excluded.source_type,
+            updated_at = now()
+        where public.forecast_pending.generated_at <= excluded.generated_at
+    """
+
+    try:
+        with psycopg.connect(DATABASE_URL, connect_timeout=10) as conn:
+            with conn.cursor() as cur:
+                cur.executemany(sql, rows)
+        print(f"[INFO] forecast_pending frissitve: {len(rows)} celora", flush=True)
+    except Exception as e:
+        print(f"[HIBA] forecast_pending mentes: {type(e).__name__}: {e}", flush=True)
+
+
+def fill_missing_pending_mavir(mavir_forecast):
+    """Csak a hiányzó MAVIR-értékeket tölti ki, meglévőt nem ír felül."""
+    if not mavir_forecast or not _db_available():
+        return
+
+    rows = []
+    for target_local, value in mavir_forecast.items():
+        if value is None:
+            continue
+        target_time = _aware_budapest(target_local).tz_convert("UTC")
+        rows.append((float(value), target_time.to_pydatetime()))
+
+    if not rows:
+        return
+
+    sql = """
+        update public.forecast_pending
+        set mavir_forecast_mwh = %s,
+            updated_at = now()
+        where target_time = %s
+          and mavir_forecast_mwh is null
     """
     try:
         with psycopg.connect(DATABASE_URL, connect_timeout=10) as conn:
             with conn.cursor() as cur:
                 cur.executemany(sql, rows)
-        print(f"[INFO] forecast_log mentve: {len(rows)} sor, run_id={run_id}", flush=True)
     except Exception as e:
-        print(f"[HIBA] forecast_log mentes: {type(e).__name__}: {e}", flush=True)
+        print(f"[HIBA] hianyzo MAVIR visszatoltes: {type(e).__name__}: {e}", flush=True)
 
 
-def backfill_forecast_actuals(load, now):
-    """Lezárt órák tényadatának visszatöltése a forecast_log-ba.
+def finalize_completed_forecasts(load, now):
+    """Lezárja azt az egy célórát/sorokat, amelyeket a modell már nem jósol újra.
 
-    A párosítást a Postgres végzi (unnest + join), nem Python. Így a
-    timestamp/timestamptz oszloptípus és az időzóna-értelmezés az
-    adatbázison belül marad konzisztens — ugyanaz a cast fut az
-    összehasonlításnál, mint a beszúrásnál. A régi Python-oldali
-    `if target_utc not in completed.index: continue` csendben eldobott
-    minden sort, ha az adatbázis más faliórával adta vissza az időt.
+    A forecast_log-ba kizárólag akkor kerül sor, ha:
+      - az adott órához már van teljes, lezárt tényadat;
+      - létezik hozzá korábban eltett CatBoost-jóslat;
+      - létezik hozzá MAVIR-jóslat.
+
+    A célóra bekerülése után a sor változtathatatlan. A pending sor törlődik.
     """
-    if load is None or len(load) == 0 or not DATABASE_URL or psycopg is None:
+    if not _db_available():
         return
 
-    # Mért fogyasztás -> UTC egész órák (mint eddig)
-    load_utc = load.copy()
-    load_index = pd.DatetimeIndex(load_utc.index)
-    if load_index.tz is None:
-        load_index = load_index.tz_localize(
-            BUDAPEST_TZ, ambiguous="infer", nonexistent="shift_forward"
-        )
-    else:
-        load_index = load_index.tz_convert(BUDAPEST_TZ)
-    load_utc.index = load_index.tz_convert("UTC").floor("h")
-    load_utc = load_utc.groupby(level=0).mean().sort_index()
-
-    now_utc = pd.Timestamp(now)
-    if now_utc.tzinfo is None:
-        now_utc = now_utc.tz_localize(BUDAPEST_TZ)
-    completed_cutoff = now_utc.tz_convert("UTC").floor("h") - pd.Timedelta(hours=1)
-    completed = load_utc[load_utc.index <= completed_cutoff]
+    completed = _completed_load_utc(load, now)
     if completed.empty:
-        print("[INFO] forecast_log tenyadat: nincs lezart mert ora", flush=True)
+        print("[INFO] forecast_log: nincs uj lezart ora", flush=True)
         return
 
-    times = [t.to_pydatetime() for t in completed.index]   # tz-aware UTC
-    vals = [float(v) for v in completed.values]
+    times = [t.to_pydatetime() for t in completed.index]
+    values = [float(v) for v in completed.values]
 
     sql = """
-        update public.forecast_log f
-        set actual_mwh = a.actual,
-            catboost_abs_error = abs(f.catboost_pred_mwh - a.actual),
-            mavir_abs_error = case
-                when f.mavir_forecast_mwh is null then null
-                else abs(f.mavir_forecast_mwh - a.actual)
-            end
-        from (
-            select unnest(%s::timestamptz[]) as target_time,
-                   unnest(%s::float8[]) as actual
-        ) a
-        where f.actual_mwh is null
-          and f.target_time = a.target_time
+        with actuals as (
+            select *
+            from unnest(%s::timestamptz[], %s::float8[])
+                 as a(target_time, actual_mwh)
+        ),
+        inserted as (
+            insert into public.forecast_log (
+                run_id, generated_at, target_time, horizon_h,
+                catboost_pred_mwh, mavir_forecast_mwh, actual_mwh,
+                catboost_abs_error, mavir_abs_error, model_version,
+                input_quality_label, stl_anomaly_lag_count, source_type
+            )
+            select
+                p.run_id,
+                p.generated_at,
+                p.target_time,
+                p.horizon_h,
+                p.catboost_pred_mwh,
+                p.mavir_forecast_mwh,
+                a.actual_mwh,
+                abs(p.catboost_pred_mwh - a.actual_mwh),
+                abs(p.mavir_forecast_mwh - a.actual_mwh),
+                p.model_version,
+                p.input_quality_label,
+                p.stl_anomaly_lag_count,
+                p.source_type
+            from public.forecast_pending p
+            join actuals a on a.target_time = p.target_time
+            where p.mavir_forecast_mwh is not null
+            on conflict (target_time) do nothing
+            returning target_time
+        )
+        delete from public.forecast_pending p
+        using inserted i
+        where p.target_time = i.target_time
     """
+
     try:
         with psycopg.connect(DATABASE_URL, connect_timeout=10) as conn:
             with conn.cursor() as cur:
-                cur.execute(sql, (times, vals))
-                frissitett = cur.rowcount
-        print(f"[INFO] forecast_log tenyadat: {frissitett} sor frissitve "
-              f"({len(vals)} lezart ora atadva)", flush=True)
+                cur.execute(sql, (times, values))
+                finalized = cur.rowcount
+        print(f"[INFO] forecast_log: {finalized} celora veglegesen lezarva", flush=True)
     except Exception as e:
-        print(f"[HIBA] forecast_log tenyadat-visszatoltes: {type(e).__name__}: {e}", flush=True)
+        print(f"[HIBA] forecast_log lezaras: {type(e).__name__}: {e}", flush=True)
+
 
 C = {'bg':'#050d1a','sb':'#070f1e','card':'#0a1628','card2':'#0f1923','brd':'#1a2d42',
      'txt':'#cbd5e1','mut':'#64748b','or':'#FF6600','gr':'#10b981','bl':'#0066CC',
@@ -1120,11 +1202,22 @@ def fetch(n,_manual):
         except Exception as e:
             print(f"[HIBA] Heti átlag: {e}", flush=True)
 
+    mavir_forecast = ({pd.Timestamp(k):float(v) for k,v in mavir_fc.items()}
+                      if mavir_fc_ok else {})
+
+    # 1) Először a már lezárt órák kerülnek a végleges forecast_log táblába.
+    # Ezeket a modell a celablak() logikája miatt többé nem jósolja újra.
+    if load_ok:
+        if mavir_forecast:
+            fill_missing_pending_mavir(mavir_forecast)
+        finalize_completed_forecasts(load, most)
+
+    # 2) A még jövőbeli célórák csak az ideiglenes pending táblába kerülnek.
+    # Célóránként egy sor van, amelyet az újraszámolás addig frissíthet,
+    # amíg meg nem érkezik az adott óra lezárt tényadata.
     if eredm:
         input_quality_label = "complete" if not hianyzo else "degraded"
-        mavir_forecast = ({pd.Timestamp(k):float(v) for k,v in mavir_fc.items()}
-                          if mavir_fc_ok else {})
-        save_forecast_log(
+        save_pending_forecasts(
             forecast=eredm,
             generated_at=most,
             input_quality_label=input_quality_label,
@@ -1132,9 +1225,6 @@ def fetch(n,_manual):
             source_type="manual" if manual else "automatic",
             mavir_forecast=mavir_forecast,
         )
-
-    if load_ok:
-        backfill_forecast_actuals(load, most)
 
     return {"kritikus_hiba":False,
         "eredm":eredm,
