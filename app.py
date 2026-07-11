@@ -1246,6 +1246,10 @@ def fetch(n,_manual):
                 "anomalia_db":int(mask.sum()),
                 "stat":{"std":std,"mean":mean,"kuszob":kuszob,
                     "irany":"emelkedő" if res.trend.iloc[-1]>res.trend.iloc[-24] else "csökkenő"}}
+            if ido_ok and dam_ok:
+                save_stl_anomalies(s, res, kuszob, mean,
+                    {r["Datum"]: r for r in ido_df.to_dict("records")},
+                    dam_oras)
         except Exception as e:
             print(f"[HIBA] STL: {e}", flush=True)
 
