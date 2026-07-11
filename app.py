@@ -258,6 +258,54 @@ def finalize_completed_forecasts(load, now):
     except Exception as e:
         print(f"[HIBA] forecast_log lezaras: {type(e).__name__}: {e}", flush=True)
 
+def save_stl_anomalies(load_series, stl_res, kuszob, atlag, ido_map, dam_oras):
+    """STL-anomáliák mentése teljes kontextussal (fogyasztás + időjárás + ár).
+
+    Csak a küszöböt átlépő órák kerülnek be. Az időjárás/ár oszlopok
+    None-ok maradnak, ha az adott óra kívül esik a lekért ablakon —
+    a friss anomáliáknál mindig lesz kontextus."""
+    if not _db_available():
+        return
+    resid = stl_res.resid
+    mask = abs(resid - atlag) > kuszob
+    if not mask.any():
+        return
+
+    sql = """
+        insert into public.stl_anomalia (
+            target_time, actual_mwh, expected_mwh, residual_mwh, threshold_mwh,
+            homerseklet_c, szelsebesseg_kmh, napsugarzas_w_m2, csapadek_mm,
+            dam_eur_mwh, ora, hetvege, unnepnap
+        ) values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        on conflict (target_time) do update set
+            residual_mwh = excluded.residual_mwh,
+            expected_mwh = excluded.expected_mwh,
+            threshold_mwh = excluded.threshold_mwh
+    """
+    rows = []
+    for t in resid.index[mask]:
+        w = ido_map.get(t) or {}
+        tny = float(load_series.loc[t])
+        r = float(resid.loc[t])
+        rows.append((
+            _aware_budapest(t).tz_convert("UTC").to_pydatetime(),
+            tny, tny - r, r, float(kuszob),
+            float(w["Homerseklet_C"]) if w else None,
+            float(w["Szelsebesseg_kmh"]) if w else None,
+            float(w["Napsugarzas_W_m2"]) if w else None,
+            float(w["Csapadek_mm"]) if w else None,
+            float(dam_oras[t]) if t in dam_oras else None,
+            int(t.hour), t.weekday() >= 5, t.date() in hu_holidays,
+        ))
+    try:
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                for r in rows:
+                    cur.execute(sql, r)
+        print(f"[INFO] stl_anomalia: {len(rows)} ora mentve/frissitve", flush=True)
+    except Exception as e:
+        print(f"[HIBA] stl_anomalia mentes: {type(e).__name__}: {e}", flush=True)
+
 
 C = {'bg':'#050d1a','sb':'#070f1e','card':'#0a1628','card2':'#0f1923','brd':'#1a2d42',
      'txt':'#cbd5e1','mut':'#64748b','or':'#FF6600','gr':'#10b981','bl':'#0066CC',
