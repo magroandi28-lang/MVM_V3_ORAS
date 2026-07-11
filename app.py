@@ -167,6 +167,7 @@ def backfill_forecast_actuals(load, now):
               f"({len(vals)} lezart ora atadva)", flush=True)
     except Exception as e:
         print(f"[HIBA] forecast_log tenyadat-visszatoltes: {type(e).__name__}: {e}", flush=True)
+
 C = {'bg':'#050d1a','sb':'#070f1e','card':'#0a1628','card2':'#0f1923','brd':'#1a2d42',
      'txt':'#cbd5e1','mut':'#64748b','or':'#FF6600','gr':'#10b981','bl':'#0066CC',
      'rd':'#ef4444','yw':'#f59e0b','cy':'#4b9cd3','wh':'#f1f5f9'}
@@ -710,14 +711,24 @@ def toltes_ajanlas(negyed):
     # az AKTUÁLIS negyedóra ára (nem a legközelebbi rácspont!)
     akt_ar = a_l[0]
     optimalis_most = fo_kezd <= most < fo_veg
-    akt_neg_veg = None
-    if akt_ar < 0:
-        j = 0
-        while j < len(a_l)-1 and a_l[j+1] < 0: j += 1
-        akt_neg_veg = t_l[j] + timedelta(minutes=lepes)
 
-    most_jo = optimalis_most or akt_ar < 0
-    akt_veg = akt_neg_veg if akt_ar < 0 else (fo_veg if optimalis_most else None)
+    # Tolerancia-sáv: felesleges váratni, ha az ár már most is jó.
+    # IGEN, ha: negatív ár, VAGY az optimum +10 €-n belül,
+    # VAGY a hátralévő órák átlagárának 30%-a alatt van.
+    hatralevo_atl = float(np.mean(a_l))
+    kuszob = max(fo_ar + 10.0, hatralevo_atl * 0.30)
+    most_jo = optimalis_most or akt_ar < 0 or akt_ar <= kuszob
+
+    # Meddig tart a kedvező állapot? Az összefüggő szelvények vége,
+    # amíg a feltétel fennáll.
+    akt_veg = None
+    if most_jo:
+        felt = (lambda a: a < 0) if akt_ar < 0 else (lambda a: a <= kuszob)
+        j = 0
+        while j < len(a_l)-1 and felt(a_l[j+1]): j += 1
+        akt_veg = t_l[j] + timedelta(minutes=lepes)
+        if optimalis_most:
+            akt_veg = max(akt_veg, fo_veg)
 
     return {"aj_kezd":aj_kezd.isoformat(),"aj_veg":aj_veg.isoformat(),"aj_ar":aj_ar,
             "fo_kezd":fo_kezd.isoformat(),"fo_veg":fo_veg.isoformat(),
@@ -774,7 +785,8 @@ def _rgba(hex_color, alpha):
 
 def _mini_sparkline(trend, szin, jelolt_i=None):
     """A fehér karika ARRA a pontra kerül, amelyiket a kártya nagy
-    száma mutat. Ha nincs megadva, marad az utolsó pont."""
+    száma mutat. Vonal: lineáris, nem spline — a spline a 36px-es
+    sávban ellapította a csúcsot, ezért tűnt minden nap egyformának."""
     if trend is None:
         return None
     try:
@@ -786,10 +798,10 @@ def _mini_sparkline(trend, szin, jelolt_i=None):
     if jelolt_i is None or not (0 <= jelolt_i < len(y)):
         jelolt_i = len(y) - 1
     ymin, ymax = min(y), max(y)
-    pad = max((ymax - ymin) * 0.24, 1.0)
+    pad = max((ymax - ymin) * 0.08, 0.5)
     fig = go.Figure()
     fig.add_trace(go.Scatter(y=y, mode="lines",
-        line=dict(color=szin, width=2.1, shape="spline"),
+        line=dict(color=szin, width=2.1),
         fill="tozeroy", fillcolor=_rgba(szin, 0.055),
         hoverinfo="skip", showlegend=False))
     fig.add_trace(go.Scatter(x=[jelolt_i], y=[y[jelolt_i]], mode="markers",
