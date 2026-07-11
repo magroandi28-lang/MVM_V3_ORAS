@@ -258,6 +258,37 @@ def finalize_completed_forecasts(load, now):
     except Exception as e:
         print(f"[HIBA] forecast_log lezaras: {type(e).__name__}: {e}", flush=True)
 
+def _anomalia_kategoria(t, residual, w, ido_map):
+    """A nyomozás szabályai kódban. Sorrend = bizonyíték-erősség.
+    None, ha nincs időjárás-kontextus (régi órák)."""
+    if not w:
+        return None
+    temp = float(w["Homerseklet_C"])
+
+    # 1) Időjárási extrém — a modell saját küszöbeivel összhangban
+    if temp >= 30.0 or temp <= -5.0:
+        return "extrem"
+
+    # 2) Napelem-árnyék — nappali túlfogyasztás gyenge sugárzásnál:
+    # a sugárzás nem éri el a környező napok AZONOS ÓRÁI maximumának 45%-át
+    if 8 <= t.hour <= 16 and residual > 0:
+        sug = float(w["Napsugarzas_W_m2"] or 0)
+        tarsak = [float(r["Napsugarzas_W_m2"] or 0)
+                  for dt, r in ido_map.items() if dt.hour == t.hour and dt != t]
+        ref = max(tarsak) if tarsak else 0.0
+        if ref > 100 and sug < ref * 0.45:
+            return "napelem"
+
+    # 3) Fordulat — a hőmérséklet 24 óra alatt legalább 6 fokot ugrott
+    w_prev = ido_map.get(t - pd.Timedelta(hours=24))
+    if w_prev is not None:
+        if abs(temp - float(w_prev["Homerseklet_C"])) >= 6.0:
+            return "fordulat"
+
+    # 4) Ami marad: valódi kivizsgálandó
+    return "rejtely"
+
+
 def save_stl_anomalies(load_series, stl_res, kuszob, atlag, ido_map, dam_oras):
     """STL-anomáliák mentése teljes kontextussal (fogyasztás + időjárás + ár).
 
@@ -275,9 +306,12 @@ def save_stl_anomalies(load_series, stl_res, kuszob, atlag, ido_map, dam_oras):
         insert into public.stl_anomalia (
             target_time, actual_mwh, expected_mwh, residual_mwh, threshold_mwh,
             homerseklet_c, szelsebesseg_kmh, napsugarzas_w_m2, csapadek_mm,
-            dam_eur_mwh, ora, hetvege, unnepnap
-        ) values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            dam_eur_mwh, ora, hetvege, unnepnap, kategoria
+        ) values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         on conflict (target_time) do update set
+        
+        on conflict (target_time) do update set
+        kategoria = coalesce(excluded.kategoria, public.stl_anomalia.kategoria),
             residual_mwh = excluded.residual_mwh,
             expected_mwh = excluded.expected_mwh,
             threshold_mwh = excluded.threshold_mwh
@@ -296,6 +330,7 @@ def save_stl_anomalies(load_series, stl_res, kuszob, atlag, ido_map, dam_oras):
             float(w["Csapadek_mm"]) if w else None,
             float(dam_oras[t]) if t in dam_oras else None,
             int(t.hour), t.weekday() >= 5, t.date() in hu_holidays,
+            _anomalia_kategoria(t, r, w if w else None, ido_map),
         ))
     try:
         with _db_connect() as conn:
