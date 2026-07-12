@@ -276,6 +276,40 @@ def _anomalia_kategoria(t, residual, w, ido_map):
 def save_stl_anomalies(load_series, stl_res, kuszob, atlag, ido_map, dam_oras):
     """STL-anomáliák mentése teljes kontextussal (fogyasztás + időjárás + ár).
 
+    def get_validacio_adatok():
+    """A 2. oldal élő validációs sávja: napi MAE-k, win-rate, STL-kategóriák."""
+    if not DATABASE_URL or psycopg is None:
+        return None
+    try:
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    select (target_time at time zone 'Europe/Budapest')::date as nap,
+                           count(*), avg(catboost_abs_error), avg(mavir_abs_error)
+                    from public.forecast_log
+                    group by 1 order by 1 desc limit 3
+                """)
+                napok = [{"nap": str(r[0]), "orak": int(r[1]),
+                          "cb": float(r[2]), "mv": float(r[3])}
+                         for r in cur.fetchall()]
+                cur.execute("""
+                    select count(*), avg(case when catboost_abs_error < mavir_abs_error
+                                              then 1.0 else 0.0 end)
+                    from public.forecast_log
+                """)
+                o = cur.fetchone()
+                osszes = {"orak": int(o[0] or 0),
+                          "win": float(o[1])*100 if o[1] is not None else None}
+                cur.execute("""
+                    select coalesce(kategoria,'besorolatlan'), count(*)
+                    from public.stl_anomalia group by 1
+                """)
+                kat = {r[0]: int(r[1]) for r in cur.fetchall()}
+        return {"napok": napok, "osszes": osszes, "kategoriak": kat}
+    except Exception as e:
+        print(f"[HIBA] validacios adatok: {type(e).__name__}: {e}", flush=True)
+        return None
+
     Csak a küszöböt átlépő órák kerülnek be. Az időjárás/ár oszlopok
     None-ok maradnak, ha az adott óra kívül esik a lekért ablakon —
     a friss anomáliáknál mindig lesz kontextus."""
