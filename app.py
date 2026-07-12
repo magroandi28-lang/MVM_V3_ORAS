@@ -1681,6 +1681,93 @@ def _zona(h):
 FC_SAV = {"nap": (-0.19, 0.48), "szel": (-0.20, 1.25)}
 FC_MAE = {"nap": 19, "szel": 34}   # órás MAE, az átlagos termelés %-ában
 
+KAT_META = [
+    ("extrem", "Időjárási extrém", "#f59e0b", "anomalia-extrem.png"),
+    ("napelem", "Napelem-árnyék", "#4dd0e1", "anomalia-napelem.png"),
+    ("fordulat", "Trendváltás", "#10b981", "anomalia-fordulat.png"),
+    ("rejtely", "Vizsgálat alatt", "#FF6600", "anomalia-rejtely.png"),
+]
+HETNAP = ["hétfő","kedd","szerda","csütörtök","péntek","szombat","vasárnap"]
+MAVIR_KEK = "#4da3ff"
+
+
+def _validacio_panel(v):
+    cim = html.Div("ÉLŐ VALIDÁCIÓ — CATBOOST VS MAVIR",
+        style={"fontSize":"13px","fontWeight":"700","color":C['wh']})
+    if not v or not v["napok"]:
+        return html.Div([cim,
+            html.Div("Az élő adatgyűjtés elindult — az első lezárt órák után itt "
+                     "jelenik meg a napi összevetés.",
+                style={"fontSize":"11px","color":C['mut'],"marginTop":"14px"})], style=CS)
+
+    napok = list(reversed(v["napok"]))
+    max_err = max(max(n["cb"], n["mv"]) for n in napok) or 1.0
+
+    def sav(nev, ert, szin, gyoztes):
+        return html.Div([
+            html.Div(style={"height":"13px",
+                "width":f"{max(6.0, ert/max_err*72):.0f}%",
+                "background":szin,"borderRadius":"4px",
+                "opacity":"1" if gyoztes else "0.4",
+                "boxShadow":f"0 0 8px {_rgba(szin,.35)}" if gyoztes else "none"}),
+            html.Span(f"{nev} {ert:.0f} MWh",style={"fontSize":"11px",
+                "color":szin if gyoztes else "#7fa3c4",
+                "fontWeight":"600" if gyoztes else "400","whiteSpace":"nowrap"})
+        ], style={"display":"flex","alignItems":"center","gap":"8px","marginBottom":"4px"})
+
+    sorok = []
+    for n in napok:
+        d = datetime.fromisoformat(n["nap"])
+        cb_gyoz = n["cb"] <= n["mv"]
+        sorok.append(html.Div([
+            html.Div(f"{d:%m.%d}. {HETNAP[d.weekday()]} · {n['orak']} mért óra",
+                style={"fontSize":"11px","color":C['txt'],"marginBottom":"5px"}),
+            sav("CatBoost", n["cb"], C['gr'], cb_gyoz),
+            sav("MAVIR", n["mv"], MAVIR_KEK, not cb_gyoz),
+        ], style={"marginBottom":"13px"}))
+
+    o = v["osszes"]
+    lab = (f"A világító sáv a nap győztese · {o['orak']} lezárt óra · az órák "
+           f"{o['win']:.0f}%-ában a CatBoost volt közelebb" if o.get("win") is not None
+           else "")
+    return html.Div([cim,
+        html.Div("Átlagos napi tévedés a lezárt órákon · rövidebb sáv = pontosabb",
+            style={"fontSize":"11px","color":"#94a3b8","margin":"3px 0 14px"}),
+        *sorok,
+        html.Div(lab, style={"fontSize":"10px","color":C['mut'],
+            "borderTop":f"1px solid {C['brd']}","paddingTop":"9px"})], style=CS)
+
+
+def _stl_ador_panel(v, stl_db, stl_napok):
+    kat = (v or {}).get("kategoriak", {})
+    sorok = []
+    for kulcs, nev, szin, kep in KAT_META:
+        db = kat.get(kulcs, 0)
+        sorok.append(html.Div([
+            html.Img(src=f"/assets/{kep}", alt=nev, style={"width":"34px",
+                "height":"28px","objectFit":"contain","flex":"0 0 auto"}),
+            html.Span(nev, style={"flex":"1","fontSize":"11px","color":C['txt']}),
+            html.Span(str(db), style={"fontSize":"16px","fontWeight":"600","color":szin})
+        ], style={"display":"flex","alignItems":"center","gap":"10px",
+            "background":C['card2'],"border":f"1px solid {_rgba(szin,.28)}",
+            "borderRadius":"9px","padding":"8px 11px","marginBottom":"6px"}))
+
+    besorolatlan = kat.get("besorolatlan", 0)
+    megmagyarazott = stl_db - kat.get("rejtely", 0) - besorolatlan
+    lab = f"{stl_db} jelzett óra az elmúlt {stl_napok} napban"
+    if stl_db:
+        lab += f" — {max(megmagyarazott,0)} megmagyarázva"
+    if besorolatlan:
+        lab += f" · {besorolatlan} korábbi óra kontextus nélkül"
+    return html.Div([
+        html.Div("STL ADATŐR", style={"fontSize":"13px","fontWeight":"700","color":C['wh']}),
+        html.Div("Minden szokatlan óra nevet kap — 17 napos őrjárat a mért adatokon",
+            style={"fontSize":"11px","color":"#94a3b8","margin":"3px 0 12px"}),
+        *sorok,
+        html.Div(lab, style={"fontSize":"10px","color":C['mut'],
+            "borderTop":f"1px solid {C['brd']}","paddingTop":"9px","marginTop":"10px"})
+    ], style=CS)
+
 
 def elemzes(edf, data):
     if edf is None:
