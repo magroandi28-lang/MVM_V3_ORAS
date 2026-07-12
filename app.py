@@ -1752,10 +1752,10 @@ def _stl_ador_panel(v, stl_db, stl_napok):
     for kulcs, nev, szin, kep in KAT_META:
         db = kat.get(kulcs, 0)
         sorok.append(html.Div([
-            html.Img(src=f"/assets/{kep}", alt=nev, style={"width":"72px",
-                "height":"64px","objectFit":"contain","flex":"0 0 72px",
-                "filter":f"drop-shadow(0 0 7px {_rgba(szin,.45)})"}),
-            html.Span(nev, style={"flex":"1","fontSize":"11px","color":C['txt']}),
+            html.Img(src=f"/assets/{kep}", alt=nev, style={"width":"52px",
+                "height":"44px","objectFit":"cover","borderRadius":"9px",
+                "flex":"0 0 auto"}),
+            html.Span(nev, style={"flex":"1","fontSize":"12px","color":C['txt']}),
             html.Span(str(db), style={"fontSize":"16px","fontWeight":"600","color":szin})
         ], style={"display":"flex","alignItems":"center","gap":"10px",
             "background":C['card2'],"border":f"1px solid {_rgba(szin,.28)}",
