@@ -1754,7 +1754,8 @@ def _stl_ador_panel(v, stl_db, stl_napok):
         sorok.append(html.Div([
             html.Img(src=f"/assets/{kep}", alt=nev, style={"width":"60px",
                 "height":"54px","objectFit":"contain","flex":"0 0 60px",
-                "mixBlendMode":"lighten"}),
+                "mixBlendMode":"lighten",
+                "filter":f"drop-shadow(0 0 7px {_rgba(szin,.45)})"}),
             html.Span(nev, style={"flex":"1","fontSize":"11px","color":C['txt']}),
             html.Span(str(db), style={"fontSize":"16px","fontWeight":"600","color":szin})
         ], style={"display":"flex","alignItems":"center","gap":"10px",
