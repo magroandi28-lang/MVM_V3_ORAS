@@ -1690,10 +1690,10 @@ FC_SAV = {"nap": (-0.19, 0.48), "szel": (-0.20, 1.25)}
 FC_MAE = {"nap": 19, "szel": 34}   # órás MAE, az átlagos termelés %-ában
 
 KAT_META = [
-    ("extrem", "Időjárási extrém", "#f59e0b", "🌡"),
-    ("napelem", "Napelem-árnyék", "#4dd0e1", "☀"),
-    ("fordulat", "Trendváltás", "#10b981", "↗"),
-    ("rejtely", "Vizsgálat alatt", "#FF6600", "?"),
+    ("extrem", "Időjárási extrém", "#f59e0b", "anomalia-extrem.png"),
+    ("napelem", "Napelem-árnyék", "#4dd0e1", "anomalia-napelem.png"),
+    ("fordulat", "Trendváltás", "#10b981", "anomalia-fordulat.png"),
+    ("rejtely", "Vizsgálat alatt", "#FF6600", "anomalia-rejtely.png"),
 ]
 HETNAP = ["hétfő","kedd","szerda","csütörtök","péntek","szombat","vasárnap"]
 MAVIR_KEK = "#4da3ff"
@@ -1739,30 +1739,27 @@ def _validacio_panel(v):
            f"{o['win']:.0f}%-ában a CatBoost volt közelebb" if o.get("win") is not None
            else "")
     return html.Div([cim,
-        html.Div("Napi MAE: a jóslat és a tényleges fogyasztás átlagos abszolút különbsége · rövidebb = pontosabb",
+        html.Div("Átlagos napi tévedés a lezárt órákon · rövidebb sáv = pontosabb",
             style={"fontSize":"11px","color":"#94a3b8","margin":"3px 0 14px"}),
         *sorok,
         html.Div(lab, style={"fontSize":"10px","color":C['mut'],
-            "borderTop":f"1px solid {C['brd']}","paddingTop":"9px"})],
-        style={**CS, "height":"auto"})
+            "borderTop":f"1px solid {C['brd']}","paddingTop":"9px"})], style=CS)
 
 
 def _stl_ador_panel(v, stl_db, stl_napok):
     kat = (v or {}).get("kategoriak", {})
     sorok = []
-    for kulcs, nev, szin, ikon in KAT_META:
+    for kulcs, nev, szin, kep in KAT_META:
         db = kat.get(kulcs, 0)
         sorok.append(html.Div([
-            html.Span(ikon, role="img", **{"aria-label": nev}, style={
-                "width":"66px", "flex":"0 0 66px", "textAlign":"center",
-                "fontSize":"40px", "lineHeight":"1", "fontWeight":"700",
-                "color":szin, "textShadow":f"0 0 12px {_rgba(szin,.65)}"
-            }),
-            html.Span(nev, style={"flex":"1","fontSize":"12px","color":C['txt']}),
+            html.Img(src=f"/assets/{kep}", alt=nev, style={"width":"60px",
+                "height":"54px","objectFit":"contain","flex":"0 0 60px",
+                "mixBlendMode":"lighten"}),
+            html.Span(nev, style={"flex":"1","fontSize":"11px","color":C['txt']}),
             html.Span(str(db), style={"fontSize":"16px","fontWeight":"600","color":szin})
-        ], style={"display":"flex","alignItems":"center","gap":"12px",
+        ], style={"display":"flex","alignItems":"center","gap":"10px",
             "background":C['card2'],"border":f"1px solid {_rgba(szin,.28)}",
-            "borderRadius":"9px","padding":"7px 11px","marginBottom":"7px"}))
+            "borderRadius":"9px","padding":"8px 11px","marginBottom":"6px"}))
 
     besorolatlan = kat.get("besorolatlan", 0)
     megmagyarazott = stl_db - kat.get("rejtely", 0) - besorolatlan
@@ -1778,7 +1775,7 @@ def _stl_ador_panel(v, stl_db, stl_napok):
         *sorok,
         html.Div(lab, style={"fontSize":"10px","color":C['mut'],
             "borderTop":f"1px solid {C['brd']}","paddingTop":"9px","marginTop":"10px"})
-    ], style={**CS, "height":"auto"})
+    ], style=CS)
 
 
 def elemzes(edf, data):
@@ -1976,7 +1973,7 @@ def elemzes(edf, data):
             dbc.Col(_stl_ador_panel(data.get("validacio"),
                 data["stl"]["anomalia_db"] if data.get("stl") else 0,
                 data.get("stl_napok") or 0), lg=5, md=12),
-        ], className="g-3", style={"alignItems":"flex-start"})
+        ], className="g-3")
     ])
 
 
