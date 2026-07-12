@@ -1339,9 +1339,10 @@ def fetch(n,_manual):
             source_type="manual" if manual else "automatic",
             mavir_forecast=mavir_forecast,
         )
-
-    return {"kritikus_hiba":False,
+    validacio = get_validacio_adatok()
+    dbc.Row([dbc.Col(fogy_panel, md=12)], className="g-3 mb-3"),
         "eredm":eredm,
+        "validacio":validacio,
         "ablak_h":ablak_h,
         "eur_huf":eur_huf if eur_ok else None,
         "negyed":dam["negyed"],
@@ -1959,7 +1960,12 @@ def elemzes(edf, data):
         html.Div("Energiaelemzés", style={"fontSize":"16px","fontWeight":"600",
             "color":C['wh'],"marginBottom":"14px"}),
         dbc.Row([dbc.Col(fogy_panel, md=12)], className="g-3 mb-3"),
-        dbc.Row([dbc.Col(megujulo_panel, md=12)], className="g-3")
+        dbc.Row([
+            dbc.Col(_validacio_panel(data.get("validacio")), lg=7, md=12),
+            dbc.Col(_stl_ador_panel(data.get("validacio"),
+                data["stl"]["anomalia_db"] if data.get("stl") else 0,
+                data.get("stl_napok") or 0), lg=5, md=12),
+        ], className="g-3")
     ])
 
 
