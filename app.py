@@ -1755,8 +1755,9 @@ def _stl_ador_panel(v, stl_db, stl_napok):
             html.Div(
                 html.Img(src=f"/assets/{kep}", alt=nev, style={
                     "width":"60px", "height":"54px", "objectFit":"contain",
-                    "filter":f"brightness(1.75) contrast(1.18) saturate(1.25) "
-                             f"drop-shadow(0 0 9px {_rgba(szin,.5)})"
+                    "mixBlendMode":"screen",
+                    "filter":f"brightness(1.35) contrast(1.08) saturate(1.18) "
+                             f"drop-shadow(0 0 7px {_rgba(szin,.42)})"
                 }),
                 style={
                     "width":"66px", "height":"58px", "flex":"0 0 66px",
