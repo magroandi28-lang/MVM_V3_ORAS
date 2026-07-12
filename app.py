@@ -1754,19 +1754,16 @@ def _stl_ador_panel(v, stl_db, stl_napok):
         sorok.append(html.Div([
             html.Div(
                 html.Img(src=f"/assets/{kep}", alt=nev, style={
-                    "width":"46px", "height":"40px", "objectFit":"contain",
-                    "filter":f"brightness(1.65) contrast(1.15) saturate(1.2) "
-                             f"drop-shadow(0 0 7px {_rgba(szin,.55)})"
+                    "width":"60px", "height":"54px", "objectFit":"contain",
+                    "filter":f"brightness(1.75) contrast(1.18) saturate(1.25) "
+                             f"drop-shadow(0 0 9px {_rgba(szin,.5)})"
                 }),
                 style={
-                    "width":"54px", "height":"46px", "flex":"0 0 54px",
+                    "width":"66px", "height":"58px", "flex":"0 0 66px",
                     "display":"flex", "alignItems":"center", "justifyContent":"center",
-                    "background":_rgba(szin,.09),
-                    "border":f"1px solid {_rgba(szin,.22)}",
-                    "borderRadius":"9px"
                 }
             ),
-            html.Span(nev, style={"flex":"1","fontSize":"11px","color":C['txt']}),
+            html.Span(nev, style={"flex":"1","fontSize":"12px","color":C['txt']}),
             html.Span(str(db), style={"fontSize":"16px","fontWeight":"600","color":szin})
         ], style={"display":"flex","alignItems":"center","gap":"12px",
             "background":C['card2'],"border":f"1px solid {_rgba(szin,.28)}",
