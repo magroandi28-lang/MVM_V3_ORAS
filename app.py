@@ -123,16 +123,25 @@ def save_pending_forecasts(forecast, generated_at, input_quality_label,
         ))
 
     sql = """
-        insert into public.stl_anomalia (
-            target_time, actual_mwh, expected_mwh, residual_mwh, threshold_mwh,
-            homerseklet_c, szelsebesseg_kmh, napsugarzas_w_m2, csapadek_mm,
-            dam_eur_mwh, ora, hetvege, unnepnap, kategoria
-        ) values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        insert into public.forecast_pending (
+            run_id, generated_at, target_time, horizon_h,
+            catboost_pred_mwh, mavir_forecast_mwh, model_version,
+            input_quality_label, stl_anomaly_lag_count, source_type, updated_at
+        ) values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         on conflict (target_time) do update set
-            residual_mwh = excluded.residual_mwh,
-            expected_mwh = excluded.expected_mwh,
-            threshold_mwh = excluded.threshold_mwh,
-            kategoria = coalesce(excluded.kategoria, public.stl_anomalia.kategoria)
+            run_id = excluded.run_id,
+            generated_at = excluded.generated_at,
+            horizon_h = excluded.horizon_h,
+            catboost_pred_mwh = excluded.catboost_pred_mwh,
+            mavir_forecast_mwh = coalesce(
+                excluded.mavir_forecast_mwh,
+                public.forecast_pending.mavir_forecast_mwh
+            ),
+            model_version = excluded.model_version,
+            input_quality_label = excluded.input_quality_label,
+            stl_anomaly_lag_count = excluded.stl_anomaly_lag_count,
+            source_type = excluded.source_type,
+            updated_at = excluded.updated_at
     """
 
     try:
@@ -273,10 +282,7 @@ def _anomalia_kategoria(t, residual, w, ido_map):
     return "rejtely"
 
 
-def save_stl_anomalies(load_series, stl_res, kuszob, atlag, ido_map, dam_oras):
-    """STL-anomáliák mentése teljes kontextussal (fogyasztás + időjárás + ár).
-
-    def get_validacio_adatok():
+def get_validacio_adatok():
     """A 2. oldal élő validációs sávja: napi MAE-k, win-rate, STL-kategóriák."""
     if not DATABASE_URL or psycopg is None:
         return None
@@ -310,6 +316,9 @@ def save_stl_anomalies(load_series, stl_res, kuszob, atlag, ido_map, dam_oras):
         print(f"[HIBA] validacios adatok: {type(e).__name__}: {e}", flush=True)
         return None
 
+def save_stl_anomalies(load_series, stl_res, kuszob, atlag, ido_map, dam_oras):
+    """STL-anomáliák mentése teljes kontextussal (fogyasztás + időjárás + ár).
+
     Csak a küszöböt átlépő órák kerülnek be. Az időjárás/ár oszlopok
     None-ok maradnak, ha az adott óra kívül esik a lekért ablakon —
     a friss anomáliáknál mindig lesz kontextus."""
@@ -327,9 +336,7 @@ def save_stl_anomalies(load_series, stl_res, kuszob, atlag, ido_map, dam_oras):
             dam_eur_mwh, ora, hetvege, unnepnap, kategoria
         ) values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         on conflict (target_time) do update set
-        
-        on conflict (target_time) do update set
-        kategoria = coalesce(excluded.kategoria, public.stl_anomalia.kategoria),
+            kategoria = coalesce(excluded.kategoria, public.stl_anomalia.kategoria),
             residual_mwh = excluded.residual_mwh,
             expected_mwh = excluded.expected_mwh,
             threshold_mwh = excluded.threshold_mwh
@@ -1340,7 +1347,7 @@ def fetch(n,_manual):
             mavir_forecast=mavir_forecast,
         )
     validacio = get_validacio_adatok()
-    dbc.Row([dbc.Col(fogy_panel, md=12)], className="g-3 mb-3"),
+    return {
         "eredm":eredm,
         "validacio":validacio,
         "ablak_h":ablak_h,
