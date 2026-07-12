@@ -1752,13 +1752,25 @@ def _stl_ador_panel(v, stl_db, stl_napok):
     for kulcs, nev, szin, kep in KAT_META:
         db = kat.get(kulcs, 0)
         sorok.append(html.Div([
-            html.Img(src=f"/assets/{kep}", alt=nev, style={"width":"34px",
-                "height":"28px","objectFit":"contain","flex":"0 0 auto"}),
+            html.Div(
+                html.Img(src=f"/assets/{kep}", alt=nev, style={
+                    "width":"46px", "height":"40px", "objectFit":"contain",
+                    "filter":f"brightness(1.65) contrast(1.15) saturate(1.2) "
+                             f"drop-shadow(0 0 7px {_rgba(szin,.55)})"
+                }),
+                style={
+                    "width":"54px", "height":"46px", "flex":"0 0 54px",
+                    "display":"flex", "alignItems":"center", "justifyContent":"center",
+                    "background":_rgba(szin,.09),
+                    "border":f"1px solid {_rgba(szin,.22)}",
+                    "borderRadius":"9px"
+                }
+            ),
             html.Span(nev, style={"flex":"1","fontSize":"11px","color":C['txt']}),
             html.Span(str(db), style={"fontSize":"16px","fontWeight":"600","color":szin})
-        ], style={"display":"flex","alignItems":"center","gap":"10px",
+        ], style={"display":"flex","alignItems":"center","gap":"12px",
             "background":C['card2'],"border":f"1px solid {_rgba(szin,.28)}",
-            "borderRadius":"9px","padding":"8px 11px","marginBottom":"6px"}))
+            "borderRadius":"9px","padding":"7px 11px","marginBottom":"7px"}))
 
     besorolatlan = kat.get("besorolatlan", 0)
     megmagyarazott = stl_db - kat.get("rejtely", 0) - besorolatlan
