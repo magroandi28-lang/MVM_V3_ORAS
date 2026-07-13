@@ -328,7 +328,52 @@ def get_validacio_adatok():
                     from public.stl_anomalia group by 1
                 """)
                 kat = {r[0]: int(r[1]) for r in cur.fetchall()}
-        return {"napok": napok, "osszes": osszes, "kategoriak": kat}
+                # ---- Heti napló: e hét (hétfőtől) kumulált eredményei ----
+                cur.execute("""
+                    select count(*),
+                           avg(catboost_abs_error),
+                           avg(first_abs_error),
+                           avg(mavir_abs_error)
+                    from public.forecast_log
+                    where (target_time at time zone 'Europe/Budapest')
+                          >= date_trunc('week', now() at time zone 'Europe/Budapest')
+                """)
+                h = cur.fetchone()
+                het = {"orak": int(h[0] or 0),
+                       "cb": float(h[1]) if h[1] is not None else None,
+                       "first": float(h[2]) if h[2] is not None else None,
+                       "mv": float(h[3]) if h[3] is not None else None}
+                cur.execute("""
+                    select extract(isodow from (target_time at time zone 'Europe/Budapest'))::int,
+                           avg(catboost_abs_error), avg(mavir_abs_error)
+                    from public.forecast_log
+                    where (target_time at time zone 'Europe/Budapest')
+                          >= date_trunc('week', now() at time zone 'Europe/Budapest')
+                    group by 1
+                """)
+                het["napok"] = {int(r[0]): bool(float(r[1]) <= float(r[2]))
+                                for r in cur.fetchall()}
+                cur.execute("""
+                    select target_time at time zone 'Europe/Budapest', catboost_abs_error
+                    from public.forecast_log
+                    where (target_time at time zone 'Europe/Budapest')
+                          >= date_trunc('week', now() at time zone 'Europe/Budapest')
+                    order by catboost_abs_error asc limit 1
+                """)
+                jo = cur.fetchone()
+                cur.execute("""
+                    select target_time at time zone 'Europe/Budapest', catboost_abs_error
+                    from public.forecast_log
+                    where (target_time at time zone 'Europe/Budapest')
+                          >= date_trunc('week', now() at time zone 'Europe/Budapest')
+                    order by catboost_abs_error desc limit 1
+                """)
+                rossz = cur.fetchone()
+                het["legjobb"] = ({"ido": jo[0].isoformat(), "err": float(jo[1])}
+                                  if jo else None)
+                het["legrosszabb"] = ({"ido": rossz[0].isoformat(), "err": float(rossz[1])}
+                                      if rossz else None)
+        return {"napok": napok, "osszes": osszes, "kategoriak": kat, "het": het}
     except Exception as e:
         print(f"[HIBA] validacios adatok: {type(e).__name__}: {e}", flush=True)
         return None
@@ -1795,6 +1840,103 @@ def _stl_ador_panel(v, stl_db, stl_napok):
     ], style=CS)
 
 
+def _heti_naplo_panel(v):
+    """Heti hadijelentés a forecast_log-ból: három modell kumulált hibája,
+    napi győztes-pöttyök, a hét legjobb és legnehezebb órája.
+    A 'napelőtti' sor a first_pred oszlopból jön — az a MAVIR-ral azonos
+    horizontú, fair összevetés."""
+    cim = html.Div("HETI NAPLÓ", style={"fontSize":"13px","fontWeight":"700","color":C['wh']})
+    het = (v or {}).get("het") or {}
+    if not het.get("orak"):
+        return html.Div([cim,
+            html.Div("A hét első lezárt órái után itt jelenik meg a heti összesítés.",
+                style={"fontSize":"11px","color":C['mut'],"marginTop":"14px"})], style=CS)
+
+    savok_adat = [
+        ("CatBoost", "élő, 1–2h", het.get("cb"), C['gr'], 1.0, True),
+        ("CatBoost", "napelőtti", het.get("first"), C['gr'], 0.55, False),
+        ("MAVIR", "napelőtti", het.get("mv"), MAVIR_KEK, 0.7, False),
+    ]
+    ervenyes = [s[2] for s in savok_adat if s[2] is not None]
+    max_err = max(ervenyes) if ervenyes else 1.0
+
+    savok = []
+    for nev, cimke, ert, szin, op, glow in savok_adat:
+        if ert is None:
+            jobb = html.Span("gyűjtés alatt", style={"fontSize":"10px","color":C['mut']})
+            sav = html.Div()
+        else:
+            jobb = html.Span(f"{ert:.0f}", style={"fontSize":"12px","fontWeight":"600",
+                "color":szin if op >= 1.0 else _rgba(szin, 0.85)})
+            sav = html.Div(style={"height":"14px",
+                "width":f"{max(5.0, ert/max_err*58):.0f}%",
+                "background":szin,"opacity":str(op),"borderRadius":"4px",
+                "boxShadow":f"0 0 8px {_rgba(szin,.4)}" if glow else "none"})
+        savok.append(html.Div([
+            html.Span([nev+" ", html.Span(f"({cimke})", style={"color":C['mut']})],
+                style={"width":"150px","flex":"0 0 auto","fontSize":"11px","color":C['txt']}),
+            sav, jobb,
+        ], style={"display":"flex","alignItems":"center","gap":"8px","marginBottom":"7px"}))
+
+    ROVID = ["H","K","Sze","Cs","P","Szo","V"]
+    napok = het.get("napok") or {}
+    cb_gyoz = sum(1 for w in napok.values() if w)
+    mv_gyoz = sum(1 for w in napok.values() if not w)
+    pottyok = []
+    for i in range(1, 8):
+        if i in napok:
+            szin = C['gr'] if napok[i] else MAVIR_KEK
+            stilus = {"width":"22px","height":"22px","borderRadius":"50%",
+                "background":szin,"boxShadow":f"0 0 7px {_rgba(szin,.5)}"}
+        else:
+            stilus = {"width":"22px","height":"22px","borderRadius":"50%",
+                "background":C['brd']}
+        pottyok.append(html.Div([html.Div(style=stilus),
+            html.Div(ROVID[i-1], style={"fontSize":"9px","color":C['mut'],
+                "textAlign":"center","marginTop":"3px"})]))
+    pottyok.append(html.Span(f"{cb_gyoz} : {mv_gyoz}",
+        style={"fontSize":"11px","color":C['txt'],"marginLeft":"8px","alignSelf":"center"}))
+
+    def _ora_kartya(cimke, rek, szin, extra=""):
+        if not rek:
+            return html.Div()
+        dt = datetime.fromisoformat(rek["ido"])
+        return html.Div([
+            html.Div(cimke, style={"fontSize":"9px","color":C['mut'],"textTransform":"uppercase"}),
+            html.Div(f"{HETNAP[dt.weekday()]} {dt:%H:%M}", style={"fontSize":"13px",
+                "color":szin,"fontWeight":"600","marginTop":"3px"}),
+            html.Div(f"{rek['err']:.0f} MWh eltérés{extra}", style={"fontSize":"10px",
+                "color":"#94a3b8","marginTop":"1px"}),
+        ], style={"background":C['card2'],"borderRadius":"8px","padding":"9px"})
+
+    rossz = het.get("legrosszabb")
+    rossz_extra = ""
+    if rossz:
+        o = datetime.fromisoformat(rossz["ido"]).hour
+        if 17 <= o <= 21: rossz_extra = " · esti csúcs"
+
+    return html.Div([cim,
+        html.Div("Kumulált átlaghiba a hét lezárt óráin (MWh/óra)",
+            style={"fontSize":"11px","color":"#94a3b8","margin":"3px 0 14px"}),
+        *savok,
+        html.Div([
+            html.Div("Napi győztes (élő CatBoost vs MAVIR)",
+                style={"fontSize":"10px","color":C['mut'],"textTransform":"uppercase",
+                       "letterSpacing":"0.05em","marginBottom":"6px"}),
+            html.Div(pottyok, style={"display":"flex","gap":"7px","alignItems":"flex-start"}),
+        ], style={"borderTop":f"1px solid {C['brd']}","paddingTop":"11px",
+                  "marginTop":"7px","marginBottom":"12px"}),
+        html.Div([
+            _ora_kartya("A hét legjobb órája", het.get("legjobb"), C['gr']),
+            _ora_kartya("A hét legnehezebb órája", rossz, C['or'], rossz_extra),
+        ], style={"display":"grid","gridTemplateColumns":"1fr 1fr","gap":"8px"}),
+        html.Div(f"A napelőtti sor a first_pred oszlopból — a MAVIR-ral azonos "
+                 f"horizontú, fair összevetés · {het['orak']} lezárt óra a héten",
+            style={"fontSize":"10px","color":C['mut'],
+                   "borderTop":f"1px solid {C['brd']}","paddingTop":"9px","marginTop":"12px"}),
+    ], style=CS)
+
+
 def elemzes(edf, data):
     if edf is None:
         return html.Div([
@@ -1987,9 +2129,7 @@ def elemzes(edf, data):
         dbc.Row([dbc.Col(fogy_panel, md=12)], className="g-3 mb-3"),
         dbc.Row([
             dbc.Col(_validacio_panel(data.get("validacio")), lg=7, md=12),
-            dbc.Col(_stl_ador_panel(data.get("validacio"),
-                data["stl"]["anomalia_db"] if data.get("stl") else 0,
-                data.get("stl_napok") or 0), lg=5, md=12),
+            dbc.Col(_heti_naplo_panel(data.get("validacio")), lg=5, md=12),
         ], className="g-3")
     ])
 
@@ -2179,20 +2319,6 @@ def _megujulo_panel(meg, dtok, cim):
 
 def mllabor(data):
     mk = (bundle or {}).get("metrikak",{})
-    fi_n=[]; fi_v=[]
-    try:
-        fi = MODEL.feature_importances_
-        srt = sorted(zip(FEATURES, fi), key=lambda x:x[1])
-        fi_n=[x[0] for x in srt[-12:]]; fi_v=[float(x[1]) for x in srt[-12:]]
-    except Exception: pass
-    fig_fi=go.Figure()
-    if fi_n:
-        fig_fi.add_trace(go.Bar(x=fi_v,y=fi_n,orientation="h",
-            marker=dict(color=[C['or'] if v==max(fi_v) else C['bl'] for v in fi_v],opacity=0.85),
-            hovertemplate="%{y}<br>%{x:.2f}<extra></extra>"))
-    lay_fi=dict(**CHART); lay_fi["height"]=320; lay_fi["margin"]=dict(l=220,r=20,t=35,b=40)
-    lay_fi["title"]=dict(text="Feature importance (CatBoost V10, top 12)",font=dict(size=12,color=C['wh']))
-    fig_fi.update_layout(**lay_fi)
 
     if data["stl"]:
         stl=data["stl"]; idx=list(range(len(stl["trend"])))
@@ -2246,7 +2372,9 @@ def mllabor(data):
             ],style=CS),md=4)
         ],className="g-3 mb-3"),
         dbc.Row([
-            dbc.Col(html.Div([dcc.Graph(figure=fig_fi,config={"displayModeBar":False})],style=CS),md=12)
+            dbc.Col(_stl_ador_panel(data.get("validacio"),
+                data["stl"]["anomalia_db"] if data.get("stl") else 0,
+                data.get("stl_napok") or 0), lg=5, md=12)
         ],className="g-3")
     ])
 
