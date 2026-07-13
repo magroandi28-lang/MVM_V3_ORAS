@@ -120,15 +120,25 @@ def save_pending_forecasts(forecast, generated_at, input_quality_label,
             int(stl_anomaly_lag_count or 0),
             source_type,
             target_time.to_pydatetime(),
+            float(item["fogyasztas"]),        # first_pred: csak az ELSŐ írásnál marad meg
+            generated_at.to_pydatetime(),     # first_generated_at
+            int(horizon_h),                   # first_horizon_h
         ))
 
     sql = """
         insert into public.forecast_pending (
             run_id, generated_at, target_time, horizon_h,
             catboost_pred_mwh, mavir_forecast_mwh, model_version,
-            input_quality_label, stl_anomaly_lag_count, source_type, updated_at
-        ) values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            input_quality_label, stl_anomaly_lag_count, source_type, updated_at,
+            first_pred_mwh, first_generated_at, first_horizon_h
+        ) values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         on conflict (target_time) do update set
+            first_pred_mwh = coalesce(
+                public.forecast_pending.first_pred_mwh, excluded.first_pred_mwh),
+            first_generated_at = coalesce(
+                public.forecast_pending.first_generated_at, excluded.first_generated_at),
+            first_horizon_h = coalesce(
+                public.forecast_pending.first_horizon_h, excluded.first_horizon_h),
             run_id = excluded.run_id,
             generated_at = excluded.generated_at,
             horizon_h = excluded.horizon_h,
@@ -215,7 +225,9 @@ def finalize_completed_forecasts(load, now):
                 run_id, generated_at, target_time, horizon_h,
                 catboost_pred_mwh, mavir_forecast_mwh, actual_mwh,
                 catboost_abs_error, mavir_abs_error, model_version,
-                input_quality_label, stl_anomaly_lag_count, source_type
+                input_quality_label, stl_anomaly_lag_count, source_type,
+                first_pred_mwh, first_generated_at, first_horizon_h,
+                first_abs_error
             )
             select
                 p.run_id,
@@ -230,7 +242,12 @@ def finalize_completed_forecasts(load, now):
                 p.model_version,
                 p.input_quality_label,
                 p.stl_anomaly_lag_count,
-                p.source_type
+                p.source_type,
+                p.first_pred_mwh,
+                p.first_generated_at,
+                p.first_horizon_h,
+                case when p.first_pred_mwh is null then null
+                     else abs(p.first_pred_mwh - a.actual_mwh) end
             from public.forecast_pending p
             join actuals a on a.target_time = p.target_time
             where p.mavir_forecast_mwh is not null
