@@ -373,7 +373,21 @@ def get_validacio_adatok():
                                   if jo else None)
                 het["legrosszabb"] = ({"ido": rossz[0].isoformat(), "err": float(rossz[1])}
                                       if rossz else None)
-        return {"napok": napok, "osszes": osszes, "kategoriak": kat, "het": het}
+                # ---- Anomália-napló: az utolsó 7 nap esetei, legfrissebb elöl ----
+                cur.execute("""
+                    select target_time at time zone 'Europe/Budapest',
+                           residual_mwh, homerseklet_c, kategoria
+                    from public.stl_anomalia
+                    where target_time >= now() - interval '7 days'
+                    order by target_time desc
+                """)
+                naplo = [{"ido": r[0].isoformat(),
+                          "residual": float(r[1]),
+                          "homerseklet": float(r[2]) if r[2] is not None else None,
+                          "kategoria": r[3]}
+                         for r in cur.fetchall()]
+        return {"napok": napok, "osszes": osszes, "kategoriak": kat, "het": het,
+                "naplo": naplo}
     except Exception as e:
         print(f"[HIBA] validacios adatok: {type(e).__name__}: {e}", flush=True)
         return None
@@ -1096,10 +1110,10 @@ def _segment_bar(szin):
 
 def _quality_bars(szin, val):
     try:
-        aktiv_db = int(str(val).split("/")[0].strip())
+        aktiv_db = int("".join(ch for ch in str(val).split("/")[0] if ch.isdigit()) or 0)
     except Exception:
         aktiv_db = 0
-    aktiv = min(18, max(1, math.ceil(aktiv_db / 4))) if aktiv_db > 0 else 0
+    aktiv = min(18, max(1, aktiv_db * 3)) if aktiv_db > 0 else 0
     elemek = []
     for i in range(18):
         on = i < aktiv
@@ -1364,6 +1378,7 @@ def fetch(n,_manual):
             std=float(res.resid.std()); mean=float(res.resid.mean()); kuszob=2.5*std
             mask=abs(res.resid-mean)>kuszob
             stl_data={"trend":res.trend.tolist(),"seasonal":res.seasonal.tolist(),
+                "idok":[t.isoformat() for t in s.index],
                 "residual":res.resid.tolist(),"original":[float(x) for x in s],
                 "anomalia_db":int(mask.sum()),
                 "stat":{"std":std,"mean":mean,"kuszob":kuszob,
@@ -1437,6 +1452,27 @@ def nav(*_):
     ctx=dash.callback_context
     if not ctx.triggered: return "fooldal"
     return ctx.triggered[0]["prop_id"].split(".")[0].replace("nav-","")
+
+def _kpi_naplo(data):
+    return ((data.get("validacio") or {}).get("naplo")) or []
+
+def _kpi_nyitott(data):
+    return sum(1 for r in _kpi_naplo(data) if r.get("kategoria") == "rejtely")
+
+def _kpi_or_felirat(data):
+    naplo = _kpi_naplo(data)
+    if not naplo:
+        return "Nincs jelzés az elmúlt 7 napban"
+    megm = sum(1 for r in naplo
+               if r.get("kategoria") in ("extrem", "napelem", "fordulat"))
+    return f"{len(naplo)} jelzés 7 nap · {megm} megmagyarázva"
+
+def _kpi_or_szin(data):
+    ny = _kpi_nyitott(data)
+    if not _kpi_naplo(data) or ny == 0:
+        return C['gr']
+    return C['yw'] if ny <= 2 else C['or']
+
 
 NB = {"display":"flex","alignItems":"center","justifyContent":"center",
     "padding":"14px 12px","cursor":"pointer","transition":"all 0.2s","background":"transparent"}
@@ -1551,9 +1587,10 @@ def render(data,oldal,_clock):
         kpi("Budapest",f"{aho:.0f} °C" if aho is not None else "–","Most",C['yw']),
         kpi("EUR/HUF",f"{eur_huf:.1f} Ft" if eur_huf is not None else "–","Árfolyam",C['bl']),
         kpi("Legolcsóbb ablak",legolcs_ar,legolcs_ido,C['gr']),
-        kpi("Adatminőség-őr",f"{stl_db} / {stl_tot}" if data["stl"] else "–",
-            f"Anomália, elmúlt {stl_napok} nap mérés" if stl_napok else "Nem elérhető",
-            C['or'] if stl_db > 0 else C['gr']),
+        kpi("Adatminőség-őr",
+            f"{_kpi_nyitott(data)} nyitott" if data["stl"] else "–",
+            _kpi_or_felirat(data) if data["stl"] else "Nem elérhető",
+            _kpi_or_szin(data)),
     ],className="kpi-grid", style=KPI_GRID_STYLE)
 
     if oldal=="fooldal":
@@ -1759,85 +1796,6 @@ KAT_META = [
 ]
 HETNAP = ["hétfő","kedd","szerda","csütörtök","péntek","szombat","vasárnap"]
 MAVIR_KEK = "#4da3ff"
-
-
-def _validacio_panel(v):
-    cim = html.Div("ÉLŐ VALIDÁCIÓ — CATBOOST VS MAVIR",
-        style={"fontSize":"13px","fontWeight":"700","color":C['wh']})
-    if not v or not v["napok"]:
-        return html.Div([cim,
-            html.Div("Az élő adatgyűjtés elindult — az első lezárt órák után itt "
-                     "jelenik meg a napi összevetés.",
-                style={"fontSize":"11px","color":C['mut'],"marginTop":"14px"})], style=CS)
-
-    napok = list(reversed(v["napok"]))
-    max_err = max(max(n["cb"], n["mv"]) for n in napok) or 1.0
-
-    def sav(nev, ert, szin, gyoztes):
-        return html.Div([
-            html.Div(style={"height":"13px",
-                "width":f"{max(6.0, ert/max_err*72):.0f}%",
-                "background":szin,"borderRadius":"4px",
-                "opacity":"1" if gyoztes else "0.4",
-                "boxShadow":f"0 0 8px {_rgba(szin,.35)}" if gyoztes else "none"}),
-            html.Span(f"{nev} {ert:.0f} MWh",style={"fontSize":"11px",
-                "color":szin if gyoztes else "#7fa3c4",
-                "fontWeight":"600" if gyoztes else "400","whiteSpace":"nowrap"})
-        ], style={"display":"flex","alignItems":"center","gap":"8px","marginBottom":"4px"})
-
-    sorok = []
-    for n in napok:
-        d = datetime.fromisoformat(n["nap"])
-        cb_gyoz = n["cb"] <= n["mv"]
-        sorok.append(html.Div([
-            html.Div(f"{d:%m.%d}. {HETNAP[d.weekday()]} · {n['orak']} mért óra",
-                style={"fontSize":"11px","color":C['txt'],"marginBottom":"5px"}),
-            sav("CatBoost", n["cb"], C['gr'], cb_gyoz),
-            sav("MAVIR", n["mv"], MAVIR_KEK, not cb_gyoz),
-        ], style={"marginBottom":"13px"}))
-
-    o = v["osszes"]
-    lab = (f"A világító sáv a nap győztese · {o['orak']} lezárt óra · az órák "
-           f"{o['win']:.0f}%-ában a CatBoost volt közelebb" if o.get("win") is not None
-           else "")
-    return html.Div([cim,
-        html.Div("Átlagos napi tévedés a lezárt órákon · rövidebb sáv = pontosabb",
-            style={"fontSize":"11px","color":"#94a3b8","margin":"3px 0 14px"}),
-        *sorok,
-        html.Div(lab, style={"fontSize":"10px","color":C['mut'],
-            "borderTop":f"1px solid {C['brd']}","paddingTop":"9px"})], style=CS)
-
-
-def _stl_ador_panel(v, stl_db, stl_napok):
-    kat = (v or {}).get("kategoriak", {})
-    sorok = []
-    for kulcs, nev, szin, kep in KAT_META:
-        db = kat.get(kulcs, 0)
-        sorok.append(html.Div([
-            html.Img(src=f"/assets/{kep}", alt=nev, style={"width":"52px",
-                "height":"44px","objectFit":"cover","borderRadius":"9px",
-                "flex":"0 0 auto"}),
-            html.Span(nev, style={"flex":"1","fontSize":"12px","color":C['txt']}),
-            html.Span(str(db), style={"fontSize":"16px","fontWeight":"600","color":szin})
-        ], style={"display":"flex","alignItems":"center","gap":"10px",
-            "background":C['card2'],"border":f"1px solid {_rgba(szin,.28)}",
-            "borderRadius":"9px","padding":"8px 11px","marginBottom":"6px"}))
-
-    besorolatlan = kat.get("besorolatlan", 0)
-    megmagyarazott = stl_db - kat.get("rejtely", 0) - besorolatlan
-    lab = f"{stl_db} jelzett óra az elmúlt {stl_napok} napban"
-    if stl_db:
-        lab += f" — {max(megmagyarazott,0)} megmagyarázva"
-    if besorolatlan:
-        lab += f" · {besorolatlan} korábbi óra kontextus nélkül"
-    return html.Div([
-        html.Div("STL ADATŐR", style={"fontSize":"13px","fontWeight":"700","color":C['wh']}),
-        html.Div("Minden szokatlan óra nevet kap — 17 napos őrjárat a mért adatokon",
-            style={"fontSize":"11px","color":"#94a3b8","margin":"3px 0 12px"}),
-        *sorok,
-        html.Div(lab, style={"fontSize":"10px","color":C['mut'],
-            "borderTop":f"1px solid {C['brd']}","paddingTop":"9px","marginTop":"10px"})
-    ], style=CS)
 
 
 def _heti_naplo_panel(v):
@@ -2128,8 +2086,7 @@ def elemzes(edf, data):
             "color":C['wh'],"marginBottom":"14px"}),
         dbc.Row([dbc.Col(fogy_panel, md=12)], className="g-3 mb-3"),
         dbc.Row([
-            dbc.Col(_validacio_panel(data.get("validacio")), lg=7, md=12),
-            dbc.Col(_heti_naplo_panel(data.get("validacio")), lg=5, md=12),
+            dbc.Col(_heti_naplo_panel(data.get("validacio")), md=12),
         ], className="g-3")
     ])
 
@@ -2317,66 +2274,177 @@ def _megujulo_panel(meg, dtok, cim):
     ], style=CS)
 
 
-def mllabor(data):
-    mk = (bundle or {}).get("metrikak",{})
+KAT_SZIN = {k: sz for k, _, sz, _ in KAT_META}
+KAT_NEV = {k: n for k, n, _, _ in KAT_META}
+KAT_KEP = {k: kp for k, _, _, kp in KAT_META}
 
-    if data["stl"]:
-        stl=data["stl"]; idx=list(range(len(stl["trend"])))
-        fig_stl=go.Figure()
-        for vals,name,color,dash in [
-            (stl["original"],"Eredeti",C['txt'],"solid"),
-            (stl["trend"],"Trend",C['or'],"solid"),
-            (stl["seasonal"],"Szezonális",C['gr'],"solid"),
-            (stl["residual"],"Maradék",C['bl'],"dot")]:
-            fig_stl.add_trace(go.Scatter(x=idx,y=vals,name=name,mode="lines",
-                line=dict(color=color,width=1.5,dash=dash)))
-        k=stl["stat"]["kuszob"]; a=stl["stat"]["mean"]
-        fig_stl.add_hline(y=a+k,line=dict(color=C['rd'],width=1,dash="dash"))
-        fig_stl.add_hline(y=a-k,line=dict(color=C['rd'],width=1,dash="dash"))
-        lay_s=dict(**CHART); lay_s["height"]=300; lay_s["showlegend"]=True
-        lay_s["legend"]=dict(orientation="h",yanchor="bottom",y=1.02,bgcolor="rgba(0,0,0,0)",
-            font=dict(size=10,color=C['txt']))
-        lay_s["title"]=dict(text=f"Adatminőség-őr: STL dekompozíció az elmúlt {data.get('stl_napok',0)} nap "
-                                 "MÉRT fogyasztásán (anomália-figyelés, a predikciótól független)",
-                            font=dict(size=11,color=C['wh']))
-        fig_stl.update_layout(**lay_s)
-        stl_panel=html.Div([dcc.Graph(figure=fig_stl,config={"displayModeBar":False})],style=CS)
-    else:
-        stl_panel=hianyzo_panel("STL dekompozíció","Kevés élő mérési adat az elemzéshez.")
 
-    info=[
-        ("Modell","CatBoost V10 — direkt, óránként",C['wh']),
-        ("Validált MAE (720h teszt)",f"{mk.get('mae',0):.2f} MWh",C['gr']),
-        ("MAPE",f"{mk.get('mape',0):.2f}%",C['gr']),
-        ("R²",f"{mk.get('r2',0):.4f}",C['gr']),
-        ("MAVIR benchmark (u.azon teszt)",f"{mk.get('mavir_benchmark_mae',0):.1f} MWh",C['yw']),
-        ("Gördülő validáció (3 ablak)",f"{mk.get('valid_3ablak_atlag',0):.1f} MWh",C['bl']),
-        ("Feature-ök",f"{len(FEATURES) if bundle else 0} — szivárgásmentes",C['txt']),
-        ("Célablak","utolsó mért óra + 1h … +24h",C['txt']),
-        ("Mintasúlyozás","exponenciális, 2 év felezési idő",C['txt']),
-        ("Élő adatforrás","ENTSO-E + Open-Meteo/VC + ECB",C['txt']),
-    ]
+def _reziduum_panel(stl, naplo):
+    """Az STL reziduuma az utolsó 7 napon, ±2,5σ küszöbbel. A küszöböt
+    átlépő órák a kategóriájuk színét kapják — így a grafikon és a napló
+    ugyanazt a nyelvet beszéli."""
+    if not stl or not stl.get("idok"):
+        return hianyzo_panel("REZIDUUM ÉS ANOMÁLIÁK",
+            "Kevés élő mérési adat az elemzéshez.")
+    idok = [datetime.fromisoformat(t) for t in stl["idok"]]
+    resid = [float(x) for x in stl["residual"]]
+    n7 = 7 * 24
+    idok = idok[-n7:]; resid = resid[-n7:]
+    stat = stl["stat"]; kuszob = float(stat["kuszob"]); atlag = float(stat["mean"])
+
+    kat_map = {r["ido"]: r.get("kategoria") for r in (naplo or [])}
+
+    fig = go.Figure()
+    fig.add_hline(y=atlag + kuszob, line=dict(color=C['rd'], width=1, dash="dash"))
+    fig.add_hline(y=atlag - kuszob, line=dict(color=C['rd'], width=1, dash="dash"))
+    fig.add_annotation(x=idok[0], y=atlag + kuszob, text="+2,5σ", showarrow=False,
+        yanchor="bottom", xanchor="left", font=dict(size=9, color=C['rd']))
+    fig.add_annotation(x=idok[0], y=atlag - kuszob, text="−2,5σ", showarrow=False,
+        yanchor="top", xanchor="left", font=dict(size=9, color=C['rd']))
+    fig.add_trace(go.Scatter(x=idok, y=resid, mode="lines",
+        line=dict(color="#4b9cd3", width=1.5),
+        hovertemplate="%{x|%m.%d. %H:%M}<br>%{y:+,.0f} MWh<extra>reziduum</extra>",
+        showlegend=False))
+
+    csoportok = {}
+    for t, v_ in zip(idok, resid):
+        if abs(v_ - atlag) > kuszob:
+            kat = kat_map.get(t.isoformat())
+            csoportok.setdefault(kat, {"x": [], "y": []})
+            csoportok[kat]["x"].append(t); csoportok[kat]["y"].append(v_)
+    for kat, pontok in csoportok.items():
+        szin = KAT_SZIN.get(kat, "#94a3b8")
+        nev = KAT_NEV.get(kat, "besorolás előtti")
+        fig.add_trace(go.Scatter(x=pontok["x"], y=pontok["y"], mode="markers",
+            name=nev, marker=dict(size=8, color=szin,
+                line=dict(width=1, color="rgba(255,255,255,.6)")),
+            hovertemplate="%{x|%m.%d. %H:%M}<br>%{y:+,.0f} MWh<extra>" + nev + "</extra>"))
+
+    fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color=C['mut'], family='Inter,sans-serif', size=10),
+        margin=dict(l=48, r=16, t=8, b=26), height=290,
+        legend=dict(orientation="h", yanchor="top", y=-0.18,
+            bgcolor="rgba(0,0,0,0)", font=dict(size=10, color=C['txt'])),
+        xaxis=dict(type="date", gridcolor="#101f35", color=C['mut'],
+            tickformat="%m.%d", fixedrange=True),
+        yaxis=dict(title="MWh", gridcolor="#101f35", color=C['mut'],
+            zeroline=False, fixedrange=True))
 
     return html.Div([
-        html.Div("Gépi Tanulás Modell Labor",style={"fontSize":"16px","fontWeight":"600",
-            "color":C['wh'],"marginBottom":"14px"}),
+        html.Div("REZIDUUM ÉS ANOMÁLIÁK — UTOLSÓ 7 NAP",
+            style={"fontSize":"13px","fontWeight":"700","color":C['wh']}),
+        html.Div("Mért fogyasztás mínusz trend és napi ritmus · a színes pontok a "
+                 "±2,5σ küszöböt átlépő, osztályozott órák",
+            style={"fontSize":"11px","color":"#94a3b8","margin":"3px 0 8px"}),
+        dcc.Graph(figure=fig, config={"displayModeBar": False}, style={"height":"320px"})
+    ], style=CS)
+
+
+def _anomalia_naplo_panel(naplo):
+    cim = [html.Div("ANOMÁLIA-NAPLÓ",
+               style={"fontSize":"13px","fontWeight":"700","color":C['wh']}),
+           html.Div("Utolsó 7 nap · legfrissebb elöl · minden eset tartósan tárolva",
+               style={"fontSize":"11px","color":"#94a3b8","margin":"3px 0 12px"})]
+    if not naplo:
+        return html.Div([*cim,
+            html.Div("Nincs jelzett óra az elmúlt 7 napban — a bemenő adat a "
+                     "megszokott sávban mozog.",
+                style={"fontSize":"11px","color":C['gr']})], style=CS)
+    sorok = []
+    for r in naplo[:9]:
+        dt = datetime.fromisoformat(r["ido"])
+        kat = r.get("kategoria")
+        szin = KAT_SZIN.get(kat, "#94a3b8")
+        nev = KAT_NEV.get(kat, "besorolás előtti")
+        elojel_szin = "#f59e0b" if r["residual"] > 0 else "#4da3ff"
+        ho = (f"{r['homerseklet']:.0f} °C · "
+              if r.get("homerseklet") is not None else "")
+        if kat in KAT_KEP:
+            ikon = html.Img(src=f"/assets/{KAT_KEP[kat]}", alt=nev,
+                style={"width":"34px","height":"28px","objectFit":"contain",
+                       "flex":"0 0 auto"})
+        else:
+            ikon = html.Div("STL", style={"width":"34px","height":"28px",
+                "flex":"0 0 auto","display":"flex","alignItems":"center",
+                "justifyContent":"center","fontSize":"8px","color":C['mut'],
+                "background":"#141e2e","borderRadius":"6px"})
+        sorok.append(html.Div([ikon,
+            html.Div([
+                html.Div([f"{dt:%m.%d}. {HETNAP[dt.weekday()]} {dt:%H:%M} · ",
+                    html.Span(f"{r['residual']:+,.0f} MWh".replace(","," "),
+                        style={"color":elojel_szin,"fontWeight":"600"})],
+                    style={"fontSize":"11px","color":C['wh']}),
+                html.Div(f"{ho}{nev}", style={"fontSize":"9px","color":C['mut'],
+                    "marginTop":"1px"}),
+            ], style={"flex":"1","minWidth":"0"}),
+        ], style={"display":"flex","alignItems":"center","gap":"10px",
+            "background":C['card2'],"borderLeft":f"3px solid {szin}",
+            "borderRadius":"8px","padding":"7px 10px","marginBottom":"5px"}))
+    if len(naplo) > 9:
+        sorok.append(html.Div(f"… és további {len(naplo)-9} eset a 7 napból",
+            style={"fontSize":"10px","color":C['mut'],"marginTop":"6px"}))
+    return html.Div([*cim, *sorok], style=CS)
+
+
+def _stl_ador_nagy(naplo, kategoriak):
+    """A 3. oldal alsó, kinagyított mérlege: négy kategória-csempe,
+    az elmúlt 7 nap darabszámaival és a teljes történeti összesítéssel."""
+    naplo = naplo or []
+    friss = {}
+    for r in naplo:
+        k = r.get("kategoria") or "besorolatlan"
+        friss[k] = friss.get(k, 0) + 1
+    osszes = kategoriak or {}
+    csempek = []
+    for kulcs, nev, szin, kep in KAT_META:
+        csempek.append(html.Div([
+            html.Img(src=f"/assets/{kep}", alt=nev, style={"width":"84px",
+                "height":"66px","objectFit":"contain","margin":"0 auto 8px",
+                "display":"block"}),
+            html.Div(str(friss.get(kulcs, 0)), style={"fontSize":"30px",
+                "fontWeight":"600","color":szin,"textAlign":"center",
+                "lineHeight":"1"}),
+            html.Div(nev, style={"fontSize":"12px","color":C['txt'],
+                "textAlign":"center","marginTop":"5px"}),
+            html.Div(f"összesen: {osszes.get(kulcs, 0)}", style={"fontSize":"9px",
+                "color":C['mut'],"textAlign":"center","marginTop":"2px"}),
+        ], style={"background":C['card2'],"border":f"1px solid {_rgba(szin,.3)}",
+            "borderRadius":"12px","padding":"16px 12px"}))
+    nyitott = friss.get("rejtely", 0)
+    besorolatlan = friss.get("besorolatlan", 0)
+    lab = f"{len(naplo)} jelzés az elmúlt 7 napban · {nyitott} vizsgálat alatt"
+    if besorolatlan:
+        lab += f" · {besorolatlan} a kontextusgyűjtés indulása előttről"
+    lab += " — az osztályozás a következő tanítás mintasúlyait alapozza meg"
+    return html.Div([
+        html.Div("STL ADATŐR", style={"fontSize":"14px","fontWeight":"700",
+            "color":C['wh']}),
+        html.Div("Ok szerinti mérleg az elmúlt 7 nap jelzéseiről",
+            style={"fontSize":"11px","color":"#94a3b8","margin":"3px 0 14px"}),
+        html.Div(csempek, style={"display":"grid",
+            "gridTemplateColumns":"repeat(auto-fit, minmax(170px, 1fr))",
+            "gap":"10px"}),
+        html.Div(lab, style={"fontSize":"10px","color":C['mut'],
+            "borderTop":f"1px solid {C['brd']}","paddingTop":"9px",
+            "marginTop":"12px"}),
+    ], style=CS)
+
+
+def mllabor(data):
+    v = data.get("validacio") or {}
+    naplo = v.get("naplo") or []
+    return html.Div([
+        html.Div("Gépi Tanulás Modell Labor", style={"fontSize":"16px",
+            "fontWeight":"600","color":C['wh'],"marginBottom":"14px"}),
         dbc.Row([
-            dbc.Col(stl_panel,md=8),
-            dbc.Col(html.Div([
-                html.Div("Modell-kártya (validációs eredmények)",style={"fontSize":"11px",
-                    "fontWeight":"500","color":C['wh'],"marginBottom":"10px"}),
-                *[html.Div([html.Div(l,style={"fontSize":"8px","color":C['mut'],"textTransform":"uppercase"}),
-                    html.Div(v,style={"fontSize":"13px","fontWeight":"500","color":c,"marginTop":"2px"})],
-                    style={"background":C['card2'],"borderRadius":"8px","padding":"9px","marginBottom":"5px"})
-                for l,v,c in info],
-            ],style=CS),md=4)
-        ],className="g-3 mb-3"),
+            dbc.Col(_reziduum_panel(data.get("stl"), naplo), lg=8, md=12),
+            dbc.Col(_anomalia_naplo_panel(naplo), lg=4, md=12),
+        ], className="g-3 mb-3"),
         dbc.Row([
-            dbc.Col(_stl_ador_panel(data.get("validacio"),
-                data["stl"]["anomalia_db"] if data.get("stl") else 0,
-                data.get("stl_napok") or 0), lg=5, md=12)
-        ],className="g-3")
+            dbc.Col(_stl_ador_nagy(naplo, v.get("kategoriak")), md=12)
+        ], className="g-3"),
     ])
+
 
 if __name__=="__main__":
     # Lokális futtatás. Élesben (Render) a gunicorn indítja: gunicorn app:server
