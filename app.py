@@ -1070,8 +1070,8 @@ def _mini_sparkline(trend, szin, jelolt_i=None):
         y = []
     if len(y) < 2:
         return None
-    if jelolt_i is None or not (0 <= jelolt_i < len(y)):
-        jelolt_i = len(y) - 1
+    if jelolt_i is not None and not (0 <= jelolt_i < len(y)):
+        jelolt_i = None
     ymin, ymax = min(y), max(y)
     pad = max((ymax - ymin) * 0.08, 0.5)
     fig = go.Figure()
@@ -1079,9 +1079,10 @@ def _mini_sparkline(trend, szin, jelolt_i=None):
         line=dict(color=szin, width=2.1),
         fill="tozeroy", fillcolor=_rgba(szin, 0.055),
         hoverinfo="skip", showlegend=False))
-    fig.add_trace(go.Scatter(x=[jelolt_i], y=[y[jelolt_i]], mode="markers",
-        marker=dict(size=7, color=szin, line=dict(width=1.1, color="rgba(255,255,255,.78)")),
-        hoverinfo="skip", showlegend=False))
+    if jelolt_i is not None:
+        fig.add_trace(go.Scatter(x=[jelolt_i], y=[y[jelolt_i]], mode="markers",
+            marker=dict(size=7, color=szin, line=dict(width=1.1, color="rgba(255,255,255,.78)")),
+            hoverinfo="skip", showlegend=False))
     fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         margin=dict(l=0,r=0,t=0,b=0), height=36,
         xaxis=dict(visible=False, fixedrange=True),
@@ -1583,7 +1584,7 @@ def render(data,oldal,_clock):
             f"{akt_sor['fogyasztas']:,.0f} MWh".replace(","," ") if akt_sor else "–",
             (f"CatBoost V10 · {datetime.fromisoformat(akt_sor['datum']):%H:%M}"
              if akt_sor else "Előrejelzés nem elérhető"),
-            C['bl'], edf["fogyasztas"].tolist() if edf is not None else None, akt_i),
+            C['bl'], edf["fogyasztas"].tolist() if edf is not None else None, None),
         kpi("Budapest",f"{aho:.0f} °C" if aho is not None else "–","Most",C['yw']),
         kpi("EUR/HUF",f"{eur_huf:.1f} Ft" if eur_huf is not None else "–","Árfolyam",C['bl']),
         kpi("Legolcsóbb ablak",legolcs_ar,legolcs_ido,C['gr']),
