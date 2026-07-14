@@ -1243,6 +1243,8 @@ NAV_TABS = html.Div([
     html.Div("Energiaelemzés",id="nav-elemzes",n_clicks=0,
         style={"color":C['mut'],"borderBottom":"2px solid transparent"},className="nav-tab"),
     html.Div("ML Modell Labor",id="nav-mllabor",n_clicks=0,
+        style={"color":C['mut'],"borderBottom":"2px solid transparent"},className="nav-tab"),
+    html.Div("Megújulók",id="nav-megujulok",n_clicks=0,
         style={"color":C['mut'],"borderBottom":"2px solid transparent"},className="nav-tab")
 ],className="nav-tabs-row")
 
@@ -1447,7 +1449,7 @@ def fetch(n,_manual):
         "hianyzo":hianyzo}
 
 @callback(Output("oldal","data"),
-    [Input(f"nav-{x}","n_clicks") for x in ["fooldal","elemzes","mllabor"]],
+    [Input(f"nav-{x}","n_clicks") for x in ["fooldal","elemzes","mllabor","megujulok"]],
     prevent_initial_call=True)
 def nav(*_):
     ctx=dash.callback_context
@@ -1481,12 +1483,13 @@ NB = {"display":"flex","alignItems":"center","justifyContent":"center",
 @callback([Output("statusz","children"),Output("kpi-sor","children"),
     Output("oldal-content","children"),Output("src-panel","children"),
     Output("modell-panel","children"),
-    Output("nav-fooldal","style"),Output("nav-elemzes","style"),Output("nav-mllabor","style")],
+    Output("nav-fooldal","style"),Output("nav-elemzes","style"),Output("nav-mllabor","style"),
+    Output("nav-megujulok","style")],
     [Input("adatok","data"),Input("oldal","data"),Input("clock","n_intervals")])
 def render(data,oldal,_clock):
     ns=[{**NB,"color":C['gr'],"borderBottom":f"2px solid {C['gr']}"} if oldal==x
         else {**NB,"color":C['mut'],"borderBottom":"2px solid transparent"}
-        for x in ["fooldal","elemzes","mllabor"]]
+        for x in ["fooldal","elemzes","mllabor","megujulok"]]
 
     mk = (bundle or {}).get("metrikak",{})
     modell_info = html.Div([
@@ -1584,7 +1587,8 @@ def render(data,oldal,_clock):
             f"{akt_sor['fogyasztas']:,.0f} MWh".replace(","," ") if akt_sor else "–",
             (f"CatBoost V10 · {datetime.fromisoformat(akt_sor['datum']):%H:%M}"
              if akt_sor else "Előrejelzés nem elérhető"),
-            C['bl'], edf["fogyasztas"].tolist() if edf is not None else None, None),
+            C['bl'], edf["fogyasztas"].tolist() if edf is not None else None,
+            int(np.argmax(edf["fogyasztas"].values)) if edf is not None else None),
         kpi("Budapest",f"{aho:.0f} °C" if aho is not None else "–","Most",C['yw']),
         kpi("EUR/HUF",f"{eur_huf:.1f} Ft" if eur_huf is not None else "–","Árfolyam",C['bl']),
         kpi("Legolcsóbb ablak",legolcs_ar,legolcs_ido,C['gr']),
@@ -1598,6 +1602,8 @@ def render(data,oldal,_clock):
         page=fooldal(data,aj)
     elif oldal=="elemzes":
         page=elemzes(edf,data)
+    elif oldal=="megujulok":
+        page=megujulok(data)
     else:
         page=mllabor(data)
     return statusz,ksor,page,src,modell_info,*ns
@@ -2429,6 +2435,181 @@ def _stl_ador_nagy(naplo, kategoriak):
             "borderTop":f"1px solid {C['brd']}","paddingTop":"9px",
             "marginTop":"12px"}),
     ], style=CS)
+
+
+def _ar_megujulo_panel(meg, negyed):
+    """Az összekötő kártya: a mai mért megújuló termelés és a DAM-ár
+    egy tengelypárban. A felirat nem tankönyv, hanem az AZNAPI tényadat
+    dinamikus összefoglalója. A negatív árú órák zöld pöttyként ülnek
+    a termelési görbén."""
+    cim = html.Div("MEGÚJULÓK ÉS A MAI ÁRAK",
+        style={"fontSize":"13px","fontWeight":"700","color":C['wh']})
+    if not meg or not negyed or not negyed.get("ido"):
+        return html.Div([cim,
+            html.Div("A panelhez a megújuló termelés és a mai árak együtt kellenek — "
+                     "az egyik forrás jelenleg nem elérhető.",
+                style={"fontSize":"11px","color":C['mut'],"marginTop":"14px"})], style=CS)
+
+    most = _helyi_most()
+    ma = most.date()
+    mdtok = [datetime.fromisoformat(s) for s in meg["ido"]]
+    fc = [float(n) + float(s) for n, s in zip(meg["fc_nap"], meg["fc_szel"])]
+    tny = [(float(a) + float(b)) if (a is not None and b is not None) else None
+           for a, b in zip(meg["tny_nap"], meg["tny_szel"])]
+    mert_ig = max([i for i, v in enumerate(tny) if v is not None], default=-1)
+
+    # órás átlagár a negyedórás sorból
+    ar_ora = {}
+    for ts, a in zip(negyed["ido"], negyed["ar"]):
+        t = datetime.fromisoformat(ts).replace(minute=0, second=0, microsecond=0)
+        ar_ora.setdefault(t, []).append(float(a))
+    ar_ora = {k: float(np.mean(v)) for k, v in ar_ora.items()}
+    arak_sor = [ar_ora.get(t) for t in mdtok]
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(go.Scatter(x=mdtok, y=fc, mode="lines", name="Megújuló — jóslat",
+        line=dict(color=C['gr'], width=1.6, dash="dot"), opacity=0.7,
+        hovertemplate="%{x|%H:%M}<br>%{y:,.0f} MW<extra>jóslat</extra>"),
+        secondary_y=False)
+    if mert_ig >= 0:
+        fig.add_trace(go.Scatter(x=mdtok[:mert_ig+1], y=tny[:mert_ig+1],
+            mode="lines", name="Megújuló — mért",
+            line=dict(color=C['gr'], width=2.6),
+            hovertemplate="%{x|%H:%M}<br>%{y:,.0f} MW<extra>mért</extra>"),
+            secondary_y=False)
+    fig.add_trace(go.Scatter(x=mdtok, y=arak_sor, mode="lines", name="DAM ár",
+        line=dict(color="#ff9800", width=2.2),
+        hovertemplate="%{x|%H:%M}<br>%{y:.0f} €/MWh<extra>ár</extra>"),
+        secondary_y=True)
+
+    neg_x, neg_y = [], []
+    for i, t in enumerate(mdtok):
+        a = arak_sor[i]
+        if a is not None and a < 0:
+            neg_x.append(t)
+            neg_y.append(tny[i] if (i <= mert_ig and tny[i] is not None) else fc[i])
+    if neg_x:
+        fig.add_trace(go.Scatter(x=neg_x, y=neg_y, mode="markers",
+            name="Negatív árú óra",
+            marker=dict(size=10, color=C['gr'],
+                line=dict(width=2, color="rgba(255,255,255,.75)")),
+            hovertemplate="%{x|%H:%M}<br>negatív ár<extra></extra>"),
+            secondary_y=False)
+
+    fig.add_shape(type="line", x0=most, x1=most, y0=0, y1=1, yref="paper",
+        line=dict(color=C['wh'], width=1, dash="dot"))
+
+    fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color=C['mut'], family='Inter,sans-serif', size=10),
+        margin=dict(l=52, r=52, t=10, b=28), height=290,
+        legend=dict(orientation="h", yanchor="top", y=-0.16,
+            bgcolor="rgba(0,0,0,0)", font=dict(size=10, color=C['txt'])),
+        hovermode="closest",
+        xaxis=dict(type="date", gridcolor="#101f35", color=C['mut'],
+            tickformat="%H:%M", fixedrange=True))
+    fig.update_yaxes(title_text="MW", secondary_y=False, gridcolor="#101f35",
+        color=C['gr'], zeroline=False, fixedrange=True, rangemode="tozero")
+    fig.update_yaxes(title_text="€/MWh", secondary_y=True, showgrid=False,
+        color="#ff9800", zeroline=False, fixedrange=True)
+
+    # ---- dinamikus alcím + jobb oldali számkártyák, csak tényadatból ----
+    zart = [(tny[i], arak_sor[i]) for i in range(mert_ig + 1)
+            if tny[i] is not None and arak_sor[i] is not None]
+    korr = None
+    if len(zart) >= 6:
+        m_ = [z[0] for z in zart]; a_ = [z[1] for z in zart]
+        if float(np.std(m_)) > 1 and float(np.std(a_)) > 0.1:
+            korr = float(np.corrcoef(m_, a_)[0, 1])
+
+    if mert_ig >= 0:
+        cs_i = int(np.argmax([v if v is not None else -1 for v in tny[:mert_ig+1]]))
+        csucs_txt = f"{mdtok[cs_i]:%H:%M} · {tny[cs_i]:,.0f} MW".replace(",", " ")
+        csucs_cimke = "Mért megújuló-csúcs eddig"
+    else:
+        cs_i = int(np.argmax(fc))
+        csucs_txt = f"{mdtok[cs_i]:%H:%M} · {fc[cs_i]:,.0f} MW".replace(",", " ")
+        csucs_cimke = "Várható megújuló-csúcs (jóslat)"
+
+    mai_arak = [(t, a) for t, a in ar_ora.items() if t.date() == ma]
+    armin = None
+    if mai_arak:
+        armin_t, armin = min(mai_arak, key=lambda x: x[1])
+        armin_txt = f"{armin_t:%H:%M} · {armin:.0f} €/MWh"
+    else:
+        armin_txt = "–"
+
+    mai_neg = [(datetime.fromisoformat(ts), float(a))
+               for ts, a in zip(negyed["ido"], negyed["ar"])
+               if datetime.fromisoformat(ts).date() == ma and float(a) < 0]
+    if mai_neg:
+        neg_txt = f"{len(mai_neg)} negyedóra"
+        neg_sub = (f"{min(t for t, _ in mai_neg):%H:%M} – "
+                   f"{max(t for t, _ in mai_neg):%H:%M} között")
+    else:
+        neg_txt = "0"
+        neg_sub = "ma nem volt negatív ár"
+
+    if mert_ig >= 0 and mai_arak:
+        alcim = (f"Ma {mdtok[cs_i]:%H:%M}-kor volt eddig a legmagasabb mért nap+szél "
+                 f"termelés — a nap legolcsóbb órája {armin_t:%H:%M}-kor: "
+                 f"{armin:.0f} €/MWh.")
+    else:
+        alcim = ("A mért termelés beérkezéséig a napelőtti jóslat látszik — "
+                 "a tényadatok óránként frissülnek.")
+
+    def _szamkartya(felirat, ertek, sub, szin):
+        return html.Div([
+            html.Div(felirat, style={"fontSize":"9px","color":C['mut'],
+                "textTransform":"uppercase"}),
+            html.Div(ertek, style={"fontSize":"16px","fontWeight":"600",
+                "color":szin,"marginTop":"3px"}),
+            html.Div(sub, style={"fontSize":"9px","color":"#94a3b8","marginTop":"2px"}),
+        ], style={"background":C['card2'],"borderRadius":"8px","padding":"10px",
+                  "marginBottom":"8px"})
+
+    if korr is not None:
+        korr_kartya = _szamkartya("Mai együttmozgás (mért órákon)", f"{korr:+.2f}",
+            "több megújuló → olcsóbb óra" if korr < -0.3 else "ma gyenge az együttmozgás",
+            C['gr'] if korr < -0.3 else C['yw'])
+    else:
+        korr_kartya = _szamkartya("Mai együttmozgás", "gyűjtés alatt",
+            "legalább 6 mért óra kell hozzá", C['mut'])
+
+    return html.Div([cim,
+        html.Div(alcim, style={"fontSize":"11px","color":"#94a3b8","margin":"3px 0 12px"}),
+        dbc.Row([
+            dbc.Col(dcc.Graph(figure=fig, config={"displayModeBar": False},
+                style={"height":"310px"}), lg=8, md=12),
+            dbc.Col([korr_kartya,
+                _szamkartya(csucs_cimke, csucs_txt, "nap + szél együtt", C['gr']),
+                _szamkartya("A nap legolcsóbb órája", armin_txt, "DAM órás átlag", "#ff9800"),
+                _szamkartya("Negatív árú idő ma", neg_txt, neg_sub, C['gr']),
+            ], lg=4, md=12),
+        ], className="g-3"),
+        html.Div("Háttér: az alacsony költségű nap- és széltermelés kiszorítja a "
+                 "drágább erőműveket a napelőtti aukción — ezért mozog a két görbe "
+                 "jellemzően ellentétesen. Ez köti össze az időjárást, a termelést, "
+                 "az árat és a főoldali töltési döntést.",
+            style={"fontSize":"10px","color":C['mut'],
+                   "borderTop":f"1px solid {C['brd']}","paddingTop":"9px",
+                   "marginTop":"10px"}),
+    ], style=CS)
+
+
+def megujulok(data):
+    meg = data.get("megujulo")
+    if meg:
+        felso = _megujulo_panel(meg, [], "")
+    else:
+        felso = hianyzo_panel("MEGÚJULÓ TERMELÉS",
+            "A nap/szél előrejelzés jelenleg nem elérhető.")
+    return html.Div([
+        html.Div("Megújuló energia", style={"fontSize":"16px","fontWeight":"600",
+            "color":C['wh'],"marginBottom":"14px"}),
+        dbc.Row([dbc.Col(felso, md=12)], className="g-3 mb-3"),
+        dbc.Row([dbc.Col(_ar_megujulo_panel(meg, data.get("negyed")), md=12)],
+                className="g-3"),
+    ])
 
 
 def mllabor(data):
